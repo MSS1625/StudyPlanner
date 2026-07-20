@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>داشبورد | برنامه‌ریز هوشمند مطالعه</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body data-page="dashboard">
+    <div class="app-shell">
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar__brand">
+                <div class="brand__logo">🎓</div>
+                <div class="brand__info">
+                    <h1>Study Planner</h1>
+                    <span>برای دانشجویان هدفمند</span>
+                </div>
+            </div>
+            <nav class="sidebar__nav">
+                <a class="nav-link is-active" href="index.html">
+                    <span class="nav-icon">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M12 3L3 10h3v8h6V13h0v5h6v-8h3z"></path>
+                        </svg>
+                    </span>
+                    <span>داشبورد</span>
+                </a>
+                <a class="nav-link" href="subjects.html">
+                    <span class="nav-icon">
+                        <svg viewBox="0 0 24 24">
+                            <path d="M4 5h16v2H4zm0 6h16v2H4zm0 6h10v2H4z"></path>
+                        </svg>
+                    </span>
+                    <span>درس‌ها</span>
+                </a>
+                <a class="nav-link" href="exams.html">
+                    <span class="nav-icon">
+                        <svg viewBox="0 0 24 24">
+                            <path d="M7 2h10l3 4v16H4V2h3zm0 2v2h10V4H7zm0 4v10h10V8H7z"></path>
+                        </svg>
+                    </span>
+                    <span>امتحان‌ها</span>
+                </a>
+                <a class="nav-link" href="study_plan.html">
+                    <span class="nav-icon">
+                        <svg viewBox="0 0 24 24">
+                            <path d="M5 4h14v2H5zm0 7h14v2H5zm0 7h14v2H5z"></path>
+                        </svg>
+                    </span>
+                    <span>برنامه مطالعه</span>
+                </a>
+                <a class="nav-link" href="study_log.html">
+                    <span class="nav-icon">
+                        <svg viewBox="0 0 24 24"><path d="M9 16.2 5.5 12.7l-1.4 1.4L9 19 20 8l-1.4-1.4z"></path></svg>
+                    </span>
+                    <span>ثبت مطالعه</span>
+                </a>
+            </nav>
+            <div class="sidebar__footer">
+                <div class="sidebar__status">
+                    <div class="status-dot" id="statusDot"></div>
+                    <span id="statusText">در حال بررسی...</span>
+                </div>
+                <a class="ghost-button" href="login.html">حساب کاربری</a>
+            </div>
+        </aside>
+
+        <main class="main-panel">
+            <header class="topbar">
+                <button class="ghost-button menu-button" id="sidebarToggle" aria-label="باز کردن منو">
+                    <svg viewBox="0 0 24 24">
+                        <path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z"></path>
+                    </svg>
+                </button>
+                <div class="topbar__title">
+                    <h2>داشبورد اصلی</h2>
+                    <p>تصویر کلی از وضعیت درس‌ها و امتحان‌های پیشِ رو</p>
+                </div>
+                <div class="topbar__actions">
+                    <div class="user-pill" id="userGreeting">خوش آمدید</div>
+                    <button class="ghost-button" id="logoutButton">خروج</button>
+                </div>
+            </header>
+
+            <div class="page-content">
+                <div id="toast" class="toast" role="alert" aria-live="polite"></div>
+
+                <section class="metrics-grid">
+                    <article class="metric-card">
+                        <header>
+                            <span class="metric-icon metric-icon--primary">📚</span>
+                            <p>تعداد درس‌ها</p>
+                        </header>
+                        <strong id="totalSubjects">0</strong>
+                    </article>
+
+                    <article class="metric-card">
+                        <header>
+                            <span class="metric-icon metric-icon--purple">🗓️</span>
+                            <p>امتحان‌های ثبت‌شده</p>
+                        </header>
+                        <strong id="totalExams">0</strong>
+                    </article>
+
+                    <article class="metric-card">
+                        <header>
+                            <span class="metric-icon metric-icon--green">📈</span>
+                            <p>میانگین پیشرفت</p>
+                        </header>
+                        <strong id="averageProgress">0%</strong>
+                    </article>
+
+                    <article class="metric-card">
+                        <header>
+                            <span class="metric-icon metric-icon--orange">⏰</span>
+                            <p>هشدارهای فوری</p>
+                        </header>
+                        <strong id="pendingAlerts">0</strong>
+                    </article>
+                </section>
+
+                <section class="grid-two">
+                    <article class="panel">
+                        <header class="panel__header">
+                            <h3>پیشرفت درس‌ها</h3>
+                            <button class="ghost-button ghost-button--sm" id="refreshDashboard">به‌روزرسانی</button>
+                        </header>
+                        <div id="progressList" class="progress-list">
+                            <p class="empty-state">درسی ثبت نشده است.</p>
+                        </div>
+                    </article>
+
+                    <article class="panel">
+                        <header class="panel__header">
+                            <h3>تقویم مطالعه</h3>
+                        </header>
+                        <div class="panel__content">
+                            <div class="timeline" id="timelineList">
+                                <p class="empty-state">هنوز امتحانی ثبت نشده است.</p>
+                            </div>
+                        </div>
+                    </article>
+                </section>
+
+                <section class="grid-two">
+                    <article class="panel">
+                        <header class="panel__header">
+                            <h3>تقسیم‌زمان پیشنهادی</h3>
+                            <p class="panel__hint">سهم هر درس از ساعات مطالعه‌ی هفته‌ی پیش‌رو</p>
+                        </header>
+                        <div class="panel__content">
+                            <div class="mini-chart" id="studyDistribution">
+                                <p class="empty-state">در حال بارگذاری...</p>
+                            </div>
+                        </div>
+                    </article>
+
+                    <article class="panel">
+                        <header class="panel__header">
+                            <h3>هشدارها و یادآوری‌ها</h3>
+                        </header>
+                        <div id="alertsList" class="alerts-list">
+                            <p class="empty-state">هشداری وجود ندارد.</p>
+                        </div>
+                    </article>
+                </section>
+            </div>
+        </main>
+    </div>
+    <div class="backdrop" id="backdrop"></div>
+    <script src="app.js" defer></script>
+</body>
+</html>

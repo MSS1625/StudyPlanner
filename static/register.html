@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>ثبت‌نام | برنامه‌ریز هوشمند مطالعه</title>
+        <link rel="stylesheet" href="styles.css" />
+    </head>
+    <body class="auth-page" data-page="register">
+        <div class="auth-card">
+            <div class="auth-header">
+                <h1>ایجاد حساب جدید</h1>
+                <p>با ساخت حساب، برنامه‌ مطالعاتی خود را مدیریت کنید.</p>
+            </div>
+            <div id="toast" class="toast" role="alert"></div>
+            <!-- اضافه شدن onsubmit به تگ فرم -->
+            <form id="registerForm" class="auth-form">
+                <div class="form-field">
+                    <label for="registerUsername">نام کاربری</label>
+                    <input
+                        type="text"
+                        id="registerUsername"
+                        name="username"
+                        autocomplete="username"
+                        required
+                    />
+                </div>
+                <div class="form-field">
+                    <label for="registerEmail">ایمیل (اختیاری)</label>
+                    <input
+                        type="email"
+                        id="registerEmail"
+                        name="email"
+                        autocomplete="email"
+                    />
+                </div>
+                <div class="form-field">
+                    <label for="registerPassword">رمز عبور</label>
+                    <input
+                        type="password"
+                        id="registerPassword"
+                        name="password"
+                        autocomplete="new-password"
+                        required
+                    />
+                </div>
+                <button
+                    id="authActionBtn"
+                    class="primary-button auth-button"
+                    type="submit"
+                >
+                    ثبت‌نام
+                </button>
+                <p id="loginPrompt" class="auth-switch">
+                    حساب دارید؟
+                    <a href="login.html">ورود</a>
+                </p>
+            </form>
+        </div>
+        <script src="app.js" defer></script>
+    </body>
+</html>

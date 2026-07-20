@@ -1,0 +1,30 @@
+# محیط مجازی پایتون (با requirements.txt دوباره قابل‌ساخت است)
+venv/
+env/
+.venv/
+
+# فایل‌های کش‌شده‌ی پایتون
+__pycache__/
+*.py[cod]
+*$py.class
+
+# دیتابیس محلی (هرکس با migrate دیتابیس خودش را می‌سازد)
+db.sqlite3
+db.sqlite3-journal
+
+# فایل‌های استاتیکِ جمع‌آوری‌شده توسط collectstatic
+staticfiles/
+
+# متغیرهای محیطی حساس (اگر بعداً اضافه شود)
+.env
+
+# تنظیمات شخصیِ ادیتور/IDE
+.vscode/
+.idea/
+
+# فایل‌های سیستم‌عامل
+.DS_Store
+Thumbs.db
+
+# لاگ‌ها
+*.log

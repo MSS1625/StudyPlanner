@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>امتحان‌ها | برنامه‌ریز هوشمند مطالعه</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body data-page="exams">
+    <div class="app-shell">
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar__brand">
+                <div class="brand__logo">🎓</div>
+                <div class="brand__info">
+                    <h1>Study Planner</h1>
+                    <span>برای دانشجویان هدفمند</span>
+                </div>
+            </div>
+            <nav class="sidebar__nav">
+                <a class="nav-link" href="index.html">
+                    <span class="nav-icon">
+                        <svg viewBox="0 0 24 24"><path d="M12 3L3 10h3v8h6V13h0v5h6v-8h3z"></path></svg>
+                    </span>
+                    <span>داشبورد</span>
+                </a>
+                <a class="nav-link" href="subjects.html">
+                    <span class="nav-icon">
+                        <svg viewBox="0 0 24 24"><path d="M4 5h16v2H4zm0 6h16v2H4zm0 6h10v2H4z"></path></svg>
+                    </span>
+                    <span>درس‌ها</span>
+                </a>
+                <a class="nav-link is-active" href="exams.html">
+                    <span class="nav-icon">
+                        <svg viewBox="0 0 24 24"><path d="M7 2h10l3 4v16H4V2h3zm0 2v2h10V4H7zm0 4v10h10V8H7z"></path></svg>
+                    </span>
+                    <span>امتحان‌ها</span>
+                </a>
+                <a class="nav-link" href="study_plan.html">
+                    <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M5 4h14v2H5zm0 7h14v2H5zm0 7h14v2H5z"></path></svg></span>
+                    <span>برنامه مطالعه</span>
+                </a>
+                <a class="nav-link" href="study_log.html">
+                    <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M9 16.2 5.5 12.7l-1.4 1.4L9 19 20 8l-1.4-1.4z"></path></svg></span>
+                    <span>ثبت مطالعه</span>
+                </a>
+            </nav>
+            <div class="sidebar__footer">
+                <div class="sidebar__status">
+                    <div class="status-dot" id="statusDot"></div>
+                    <span id="statusText">در حال بررسی...</span>
+                </div>
+                <a class="ghost-button" href="login.html">حساب کاربری</a>
+            </div>
+        </aside>
+
+        <main class="main-panel">
+            <header class="topbar">
+                <button class="ghost-button menu-button" id="sidebarToggle">
+                    <svg viewBox="0 0 24 24"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z"></path></svg>
+                </button>
+                <div class="topbar__title">
+                    <h2>مدیریت امتحان‌ها و ددلاین‌ها</h2>
+                    <p>برای هر درس، زمان مناسب برنامه‌ریزی کنید</p>
+                </div>
+                <div class="topbar__actions">
+                    <div class="user-pill" id="userGreeting">دانشجو</div>
+                    <button class="ghost-button" id="logoutButton">خروج</button>
+                </div>
+            </header>
+
+            <div class="page-content">
+                <div id="toast" class="toast" role="alert"></div>
+
+                <section class="panel">
+                    <header class="panel__header">
+                        <h3>ثبت امتحان یا ددلاین</h3>
+                    </header>
+
+                    <form id="examForm" class="form-grid">
+                        <div class="form-group">
+                            <label for="examSubject">انتخاب درس:</label>
+                            <select id="examSubject" name="subject" required>
+                                <option value="" disabled selected>ابتدا درس را انتخاب کنید</option>
+                                <!-- گزینه‌ها توسط جاوااسکریپت پر می‌شوند -->
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="exam_date">تاریخ امتحان یا ددلاین:</label>
+                            <input type="date" id="exam_date" name="exam_date" required>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="chapters_remaining">تعداد فصل/بخش باقی‌مانده:</label>
+                            <input type="number" id="chapters_remaining" name="chapters_remaining" min="1" required placeholder="مثلا: ۵">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="study_hours_remaining">ساعت مطالعه تخمینی باقی‌مانده:</label>
+                            <input type="number" id="study_hours_remaining" name="study_hours_remaining" min="1" required placeholder="مثلا: ۲۰">
+                        </div>
+
+                        <div class="form-group full-width">
+                            <label for="note">یادداشت (اختیاری):</label>
+                            <textarea id="note" name="note" rows="2"></textarea>
+                        </div>
+
+                        <input type="hidden" id="examId" name="examId">
+                        
+                        <div class="form-actions full-width">
+                            <button type="submit" class="btn btn-primary">ذخیره امتحان</button>
+                            <button type="button" class="btn btn-secondary" onclick="resetExamForm()" style="display: none;" id="cancelExamEditBtn">انصراف</button>
+                        </div>
+                    </form>
+
+
+                </section>
+
+                <section class="panel">
+                    <header class="panel__header">
+                        <h3>فهرست امتحان‌ها</h3>
+                        <div class="panel__filter">
+                            <label>
+                                <span>نمایش:</span>
+                                <select id="examFilter">
+                                    <option value="upcoming">فقط امتحان‌های آینده</option>
+                                    <option value="all">همه</option>
+                                </select>
+                            </label>
+                        </div>
+                    </header>
+                    <div class="table-wrapper">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>درس</th>
+                                    <th>تاریخ</th>
+                                    <th>ساعت باقی‌مانده</th>
+                                    <th>درجه اهمیت</th>
+                                    <th>وضعیت</th>
+                                </tr>
+                            </thead>
+                            <tbody id="examTableBody">
+                                <tr>
+                                    <td colspan="5" class="empty-state">هنوز امتحانی ثبت نشده است.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+            </div>
+        </main>
+    </div>
+    <div class="backdrop" id="backdrop"></div>
+    <script src="app.js" defer></script>
+</body>
+</html>

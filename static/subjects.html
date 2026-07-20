@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>درس‌ها | برنامه‌ریز هوشمند مطالعه</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body data-page="subjects">
+    <div class="app-shell">
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar__brand">
+                <div class="brand__logo">🎓</div>
+                <div class="brand__info">
+                    <h1>Study Planner</h1>
+                    <span>برای دانشجویان هدفمند</span>
+                </div>
+            </div>
+            <nav class="sidebar__nav">
+                <a class="nav-link" href="index.html">
+                    <span class="nav-icon">
+                        <svg viewBox="0 0 24 24"><path d="M12 3L3 10h3v8h6V13h0v5h6v-8h3z"></path></svg>
+                    </span>
+                    <span>داشبورد</span>
+                </a>
+                <a class="nav-link is-active" href="subjects.html">
+                    <span class="nav-icon">
+                        <svg viewBox="0 0 24 24"><path d="M4 5h16v2H4zm0 6h16v2H4zm0 6h10v2H4z"></path></svg>
+                    </span>
+                    <span>درس‌ها</span>
+                </a>
+                <a class="nav-link" href="exams.html">
+                    <span class="nav-icon">
+                        <svg viewBox="0 0 24 24"><path d="M7 2h10l3 4v16H4V2h3zm0 2v2h10V4H7zm0 4v10h10V8H7z"></path></svg>
+                    </span>
+                    <span>امتحان‌ها</span>
+                </a>
+                <a class="nav-link" href="study_plan.html">
+                    <span class="nav-icon">
+                        <svg viewBox="0 0 24 24"><path d="M5 4h14v2H5zm0 7h14v2H5zm0 7h14v2H5z"></path></svg>
+                    </span>
+                    <span>برنامه مطالعه</span>
+                </a>
+                <a class="nav-link" href="study_log.html">
+                    <span class="nav-icon">
+                        <svg viewBox="0 0 24 24"><path d="M9 16.2 5.5 12.7l-1.4 1.4L9 19 20 8l-1.4-1.4z"></path></svg>
+                    </span>
+                    <span>ثبت مطالعه</span>
+                </a>
+            </nav>
+            <div class="sidebar__footer">
+                <div class="sidebar__status">
+                    <div class="status-dot" id="statusDot"></div>
+                    <span id="statusText">در حال بررسی...</span>
+                </div>
+                <a class="ghost-button" href="login.html">حساب کاربری</a>
+            </div>
+        </aside>
+
+        <main class="main-panel">
+            <header class="topbar">
+                <button class="ghost-button menu-button" id="sidebarToggle">
+                    <svg viewBox="0 0 24 24"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z"></path></svg>
+                </button>
+                <div class="topbar__title">
+                    <h2>مدیریت درس‌ها</h2>
+                    <p>درس‌های خود را تعریف و پیشرفت را کنترل کنید</p>
+                </div>
+                <div class="topbar__actions">
+                    <div class="user-pill" id="userGreeting">دانشجو</div>
+                    <button class="ghost-button" id="logoutButton">خروج</button>
+                </div>
+            </header>
+
+            <div class="page-content">
+                <div id="toast" class="toast" role="alert"></div>
+
+                <section class="panel">
+                    <header class="panel__header">
+                        <h3>افزودن درس جدید</h3>
+                    </header>
+                    <form id="subjectForm" class="form-grid">
+                        <div class="form-field">
+                            <label for="subjectName">نام درس</label>
+                            <input type="text" id="subjectName" name="name" placeholder="مثلاً پایگاه داده" required>
+                        </div>
+                        <div class="form-field">
+                            <label for="subjectDifficulty">سختی (۱ تا ۵)</label>
+                            <input type="number" id="subjectDifficulty" name="difficulty" min="1" max="5" value="3" required>
+                        </div>
+                        <div class="form-field">
+                            <label for="subjectTarget">هدف نمره (اختیاری)</label>
+                            <input type="number" id="subjectTarget" name="target_score" min="0" max="20" placeholder="مثلاً 18">
+                        </div>
+                        <div class="form-field">
+                            <label for="subjectHours">حجم کل ساعات مطالعه</label>
+                            <input type="number" id="subjectHours" name="total_hours" min="1" placeholder="مثلاً 40" required>
+                        </div>
+                        <div class="form-field form-field--full">
+                            <label for="subjectNotes">یادداشت کوتاه</label>
+                            <textarea id="subjectNotes" name="notes" rows="2" placeholder="ویژگی‌های مهم این درس"></textarea>
+                        </div>
+                        <div class="form-actions">
+                            <button type="submit" class="primary-button">ثبت درس</button>
+                            <button type="reset" class="ghost-button">پاک‌سازی</button>
+                        </div>
+                    </form>
+                </section>
+
+                <section class="panel">
+                    <header class="panel__header">
+                        <h3>فهرست درس‌ها</h3>
+                        <div class="panel__filter">
+                            <label>
+                                <span>مرتب‌سازی بر اساس:</span>
+                                <select id="subjectSort">
+                                    آ<option value="name">حروف الفبا</option>
+                                    <option value="difficulty">سختی</option>
+                                    <option value="progress">پیشرفت</option>
+                                </select>
+                            </label>
+                        </div>
+                    </header>
+                    <div class="table-wrapper">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>نام درس</th>
+                                    <th>سختی</th>
+                                    <th>پیشرفت</th>
+                                    <th>هدف</th>
+                                    <th>ساعت باقی‌مانده</th>
+                                </tr>
+                            </thead>
+                            <tbody id="subjectsTableBody">
+                                <tr>
+                                    <td colspan="5" class="empty-state">درسی هنوز ثبت نشده است.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+            </div>
+        </main>
+    </div>
+    <div class="backdrop" id="backdrop"></div>
+    <script src="app.js" defer></script>
+</body>
+</html>
