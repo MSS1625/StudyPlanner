@@ -1,3 +1,9 @@
+<!--
+    static/subjects.html — صفحه‌ی مدیریت درس‌ها
+    data-page="subjects" -> initSubjectsPage() در app.js: فرمِ ثبتِ درسِ
+    جدید (handleSubjectForm) + جدولِ فهرستِ درس‌ها با قابلیتِ مرتب‌سازی
+    (loadSubjects/sortSubjects/renderSubjects).
+-->
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
@@ -75,6 +81,10 @@
             <div class="page-content">
                 <div id="toast" class="toast" role="alert"></div>
 
+                <!-- فرمِ افزودنِ درسِ جدید؛ submit آن در handleSubjectForm()
+                     (app.js) گرفته و به POST /api/subjects/ فرستاده می‌شود.
+                     نکته: total_hours و notes فعلاً در بک‌اند ذخیره نمی‌شوند
+                     (مدلِ Subject چنین فیلدهایی ندارد) -->
                 <section class="panel">
                     <header class="panel__header">
                         <h3>افزودن درس جدید</h3>
@@ -107,6 +117,9 @@
                     </form>
                 </section>
 
+                <!-- فهرستِ درس‌ها؛ subjectsTableBody با renderSubjects() (app.js)
+                     پر می‌شود. تغییرِ select زیر، loadSubjects() را با کلیدِ
+                     مرتب‌سازیِ جدید دوباره صدا می‌زند (مرتب‌سازی سمتِ کلاینت است) -->
                 <section class="panel">
                     <header class="panel__header">
                         <h3>فهرست درس‌ها</h3>

@@ -23,6 +23,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = 'django-insecure-_2yv1re!edx4&9c5+=2e)t37xml-dnc5s08-5%#s++a%9awr-n'
 
 # SECURITY WARNING: don't run with debug turned on in production!
+# DEBUG=True یعنی خطاها با جزئیاتِ کامل (Traceback) در مرورگر نمایش داده
+# می‌شوند و فایل‌های استاتیک هم خودکار سرو می‌شوند؛ این حالت فقط برای
+# توسعه‌ی محلی مناسب است، نه برای انتشار واقعیِ سایت (Production).
 DEBUG = True
 
 ALLOWED_HOSTS = []
@@ -30,7 +33,9 @@ ALLOWED_HOSTS = []
 
 # Application definition
 
+# فهرست همه‌ی اپلیکیشن‌هایی که جنگو باید بارگذاری کند؛ به سه دسته تقسیم می‌شود:
 INSTALLED_APPS = [
+    # اپلیکیشن‌های داخلیِ خودِ جنگو (پنل ادمین، احراز هویت، فایل استاتیک و...)
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -39,16 +44,21 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
 
     # 3rd party
-    'rest_framework',
-    'rest_framework_simplejwt',
-    'corsheaders',
+    # کتابخانه‌های شخص‌ثالثی که با pip نصب شده‌اند (در requirements.txt هم هستند)
+    'rest_framework',            # فریم‌ورک ساختِ API (سریالایزر، ویوست و...)
+    'rest_framework_simplejwt',  # احراز هویت مبتنی بر JWT
+    'corsheaders',               # مدیریت هدرهای CORS
 
     # local apps
+    # اپلیکیشنِ خودِ ما که تمام منطق پروژه در آن است
     'planner',
 ]
 
 
+# میان‌افزارها (Middleware): کدی که روی *هر* درخواست/پاسخ، قبل از رسیدن
+# به View (و بعد از خروج از آن)، به‌ترتیب همین لیست اجرا می‌شود.
 MIDDLEWARE = [
+    # باید نزدیک بالای لیست باشد تا هدرهای CORS به همه‌ی پاسخ‌ها اضافه شود
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -59,8 +69,12 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
+# فایلی که نقشه‌ی اصلیِ مسیرهای کل پروژه در آن است (همان backend/urls.py)
 ROOT_URLCONF = 'backend.urls'
 
+# تنظیماتِ موتور Templateهای جنگو؛ چون فرانت‌اند این پروژه جدا (استاتیک) است
+# و از Django Template استفاده نمی‌کند، این بخش عملاً کمتر به‌کار می‌آید،
+# ولی چون پنل ادمین به آن نیاز دارد، حذف نشده است.
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
@@ -82,6 +96,8 @@ WSGI_APPLICATION = 'backend.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
+# طبق محدودیتِ پروژه، از SQLite استفاده می‌شود: کل دیتابیس در یک فایل
+# (db.sqlite3) ذخیره می‌شود و نیازی به نصب/راه‌اندازیِ سرور دیتابیسِ جدا نیست.
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
@@ -93,6 +109,8 @@ DATABASES = {
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
 
+# این قوانین، پیش از ذخیره‌ی هر رمز عبورِ جدید بررسی می‌شوند (مثلاً نباید
+# خیلی شبیهِ نامِ کاربری باشد، نباید خیلی کوتاه یا کاملاً عددی باشد و...)
 AUTH_PASSWORD_VALIDATORS = [
     {
         'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
@@ -129,6 +147,10 @@ STATIC_URL = 'static/'
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
+# به جنگو می‌گوید علاوه بر فایل‌های استاتیکِ داخلِ هر اپ، پوشه‌ی static/
+# پروژه (که رابط کاربریِ HTML/CSS/JS ما در آن است) را هم سرو کند. برای
+# همین است که می‌شود صفحاتی مثل index.html را مستقیماً روی همین سرور
+# جنگو (زیرِ آدرسِ /static/...) باز کرد.
 STATICFILES_DIRS = [
     BASE_DIR.parent / 'static', 
 ]
@@ -137,13 +159,21 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
+# اجازه می‌دهد از هر دامنه/مبدأیی (حتی وقتی فرانت‌اند روی پورتِ دیگری اجرا
+# شود) به این API درخواست زده شود. مناسبِ توسعه است؛ برای انتشارِ واقعی
+# باید با CORS_ALLOWED_ORIGINS به دامنه‌ی مشخصِ فرانت‌اند محدود شود.
 CORS_ALLOW_ALL_ORIGINS = True
 
 # REST Framework settings
+# تنظیماتِ سراسریِ DRF: همه‌ی Viewها به‌صورت پیش‌فرض این دو رفتار را دارند
+# مگر این‌که در خودِ آن View چیز دیگری مشخص شده باشد.
 REST_FRAMEWORK = {
+    # روش شناساییِ کاربر از روی هر درخواست: خواندنِ توکن JWT از هدر Authorization
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ],
+    # پیش‌فرض: هیچ درخواستی بدونِ احراز هویت پذیرفته نمی‌شود (مگر با
+    # @permission_classes([AllowAny]) صراحتاً اجازه داده شود، مثل register/login)
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
     ],
@@ -152,10 +182,15 @@ REST_FRAMEWORK = {
 # JWT settings
 from datetime import timedelta
 
+# تنظیماتِ کتابخانه‌ی djangorestframework-simplejwt
 SIMPLE_JWT = {
+    # توکنِ «دسترسی» که در هر درخواست فرستاده می‌شود، ۱ روز اعتبار دارد
     'ACCESS_TOKEN_LIFETIME': timedelta(days=1),
+    # توکنِ «تمدید» که برای گرفتنِ توکنِ دسترسیِ تازه استفاده می‌شود، ۷ روز اعتبار دارد
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    # اگر True بود، هر بار تمدید یک توکنِ Refresh تازه هم صادر می‌شد (فعلاً غیرفعال است)
     'ROTATE_REFRESH_TOKENS': False,
     'BLACKLIST_AFTER_ROTATION': False,
+    # یعنی هدر باید به‌شکلِ Authorization: Bearer <token> فرستاده شود
     'AUTH_HEADER_TYPES': ('Bearer',),
 }

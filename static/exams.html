@@ -1,3 +1,9 @@
+<!--
+    static/exams.html — صفحه‌ی مدیریت امتحان‌ها
+    data-page="exams" -> initExamsPage() در app.js: پرکردنِ کشوی «انتخاب
+    درس» (populateSubjectSelect)، فرمِ ثبتِ امتحان (handleExamForm)، و
+    جدولِ فهرستِ امتحان‌ها با فیلترِ آینده/همه (loadExams/renderExams).
+-->
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
@@ -71,6 +77,8 @@
             <div class="page-content">
                 <div id="toast" class="toast" role="alert"></div>
 
+                <!-- فرمِ ثبتِ امتحانِ جدید؛ submit آن در handleExamForm() (app.js)
+                     گرفته و به POST /api/exams/ فرستاده می‌شود -->
                 <section class="panel">
                     <header class="panel__header">
                         <h3>ثبت امتحان یا ددلاین</h3>
@@ -105,6 +113,10 @@
                             <textarea id="note" name="note" rows="2"></textarea>
                         </div>
 
+                        <!-- examId و دکمه‌ی «انصراف» برای حالتِ ویرایشِ امتحان
+                             در نظر گرفته شده‌اند؛ در حال حاضر resetExamForm()
+                             در app.js پیاده‌سازی نشده، پس این دکمه فعلاً کاری
+                             انجام نمی‌دهد (فرمِ فعلی فقط برای «ثبتِ جدید» کار می‌کند) -->
                         <input type="hidden" id="examId" name="examId">
                         
                         <div class="form-actions full-width">
@@ -116,6 +128,8 @@
 
                 </section>
 
+                <!-- فهرستِ امتحان‌ها؛ examTableBody با renderExams() (app.js) پر
+                     می‌شود. تغییرِ select زیر، loadExams() را با فیلترِ جدید صدا می‌زند -->
                 <section class="panel">
                     <header class="panel__header">
                         <h3>فهرست امتحان‌ها</h3>

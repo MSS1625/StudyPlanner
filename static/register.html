@@ -1,3 +1,8 @@
+<!--
+    static/register.html
+    صفحه‌ی ثبت‌نام. data-page="register" باعث می‌شود در روترِ انتهای app.js
+    تابعِ handleRegister() صدا زده شود.
+-->
 <!doctype html>
 <html lang="fa" dir="rtl">
     <head>
@@ -14,6 +19,12 @@
             </div>
             <div id="toast" class="toast" role="alert"></div>
             <!-- اضافه شدن onsubmit به تگ فرم -->
+            <!--
+                فرمِ ثبت‌نام: submit آن در handleRegister() (در app.js) گرفته
+                می‌شود و به POST /api/auth/register/ فرستاده می‌شود. بعد از
+                موفقیت، دکمه‌ی زیر با جاوااسکریپت به یک لینکِ «ورود به حساب»
+                تبدیل می‌شود (نگاه کنید به id="authActionBtn").
+            -->
             <form id="registerForm" class="auth-form">
                 <div class="form-field">
                     <label for="registerUsername">نام کاربری</label>

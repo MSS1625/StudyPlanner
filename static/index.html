@@ -1,3 +1,10 @@
+<!--
+    static/index.html — صفحه‌ی داشبورد اصلی
+    data-page="dashboard" باعث می‌شود در روترِ انتهای app.js تابعِ
+    initDashboardPage() صدا زده شود، که خودش loadDashboard() را اجرا
+    می‌کند: یک GET به /api/dashboard/ و پرکردنِ تمام باکس‌های زیر با
+    renderDashboard() (در app.js).
+-->
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
@@ -8,6 +15,7 @@
 </head>
 <body data-page="dashboard">
     <div class="app-shell">
+        <!-- نوارِ کناریِ راست: لوگو + منوی ناوبری بینِ صفحات + وضعیتِ اتصال -->
         <aside class="sidebar" id="sidebar">
             <div class="sidebar__brand">
                 <div class="brand__logo">🎓</div>
@@ -66,6 +74,7 @@
         </aside>
 
         <main class="main-panel">
+            <!-- نوارِ بالای صفحه: عنوان + دکمه‌ی همبرگریِ موبایل + خوش‌آمدگویی/خروج -->
             <header class="topbar">
                 <button class="ghost-button menu-button" id="sidebarToggle" aria-label="باز کردن منو">
                     <svg viewBox="0 0 24 24">
@@ -85,6 +94,8 @@
             <div class="page-content">
                 <div id="toast" class="toast" role="alert" aria-live="polite"></div>
 
+                <!-- چهار کارتِ آماریِ بالا؛ id هرکدام دقیقاً همان کلیدی است
+                     که renderDashboard() در app.js با آن مقدارِ متن را پر می‌کند -->
                 <section class="metrics-grid">
                     <article class="metric-card">
                         <header>
@@ -119,6 +130,8 @@
                     </article>
                 </section>
 
+                <!-- پنل «پیشرفت درس‌ها»: نوارِ پیشرفتِ هر درس (progressList با
+                     app.js از data.subjects_progress پر می‌شود) -->
                 <section class="grid-two">
                     <article class="panel">
                         <header class="panel__header">
@@ -130,6 +143,7 @@
                         </div>
                     </article>
 
+                    <!-- پنل «تقویم مطالعه»: فهرستِ امتحان‌های پیشِ‌رو (از data.upcoming_exams) -->
                     <article class="panel">
                         <header class="panel__header">
                             <h3>تقویم مطالعه</h3>
@@ -142,6 +156,8 @@
                     </article>
                 </section>
 
+                <!-- پنل «تقسیم‌زمان پیشنهادی»: نمودارِ میله‌ایِ سهمِ هر درس
+                     (از data.study_distribution) -->
                 <section class="grid-two">
                     <article class="panel">
                         <header class="panel__header">
@@ -155,6 +171,8 @@
                         </div>
                     </article>
 
+                    <!-- پنل «هشدارها و یادآوری‌ها»: از data.alerts (نوع
+                         danger/warning/info) پر می‌شود -->
                     <article class="panel">
                         <header class="panel__header">
                             <h3>هشدارها و یادآوری‌ها</h3>

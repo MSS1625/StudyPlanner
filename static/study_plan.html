@@ -1,3 +1,10 @@
+<!--
+    static/study_plan.html — صفحه‌ی برنامه‌ی مطالعه‌ی هوشمند
+    data-page="study-plan" -> initStudyPlanPage() در app.js: دکمه‌های
+    روزانه/هفتگی (loadStudyPlan)، فرمِ تنظیمِ ساعتِ آزادِ روزانه
+    (handleDailyHoursForm -> POST /api/study-plan/generate/)، و نمایشِ
+    بلوک‌های برنامه (renderPlan).
+-->
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
@@ -75,6 +82,8 @@
             <div class="page-content">
                 <div id="toast" class="toast" role="alert"></div>
 
+                <!-- دکمه‌های تغییرِ بازه‌ی نمایش؛ data-range همان مقداریست که
+                     به عنوانِ ?range= در GET /api/study-plan/ فرستاده می‌شود -->
                 <section class="panel">
                     <header class="panel__header">
                         <h3>بازه زمانی</h3>
@@ -99,6 +108,8 @@
                     </div>
                 </section>
 
+                <!-- فرمِ تنظیمِ ساعتِ آزادِ روزانه؛ submit آن در
+                     handleDailyHoursForm() (app.js) گرفته می‌شود -->
                 <section class="panel">
                     <header class="panel__header">
                         <h3>ساعت آزاد روزانه</h3>
@@ -114,6 +125,8 @@
                     </form>
                 </section>
 
+                <!-- جزئیاتِ برنامه: هر بلوک یک روز یا یک بازه‌ی ادغام‌شده از
+                     چند روزِ هم‌برنامه است (renderPlan در app.js پر می‌کند) -->
                 <section class="panel">
                     <header class="panel__header">
                         <h3>جزئیات برنامه</h3>

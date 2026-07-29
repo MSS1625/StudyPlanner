@@ -1,3 +1,8 @@
+<!--
+    static/login.html
+    صفحه‌ی ورود. data-page="login" روی <body> باعث می‌شود در انتهای app.js
+    تابعِ handleLogin() صدا زده شود (نگاه کنید به روترِ سبکِ انتهای app.js).
+-->
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
@@ -12,7 +17,9 @@
             <h1>ورود به حساب</h1>
             <p>برای ادامه، نام کاربری و رمز عبور را وارد کنید.</p>
         </div>
+        <!-- جای نمایشِ پیام‌های موفقیت/خطا (توسط showToast در app.js پر می‌شود) -->
         <div id="toast" class="toast" role="alert"></div>
+        <!-- فرمِ ورود: submit آن در handleLogin() گرفته و به POST /api/auth/login/ فرستاده می‌شود -->
         <form id="loginForm" class="auth-form">
             <div class="form-field">
                 <label for="loginUsername">نام کاربری</label>

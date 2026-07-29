@@ -1,4 +1,24 @@
+// static/app.js
+// ----------------------------------------------------------------------------
+// این تک‌فایل، تمام منطق جاوااسکریپتیِ فرانت‌اند است (بدون هیچ فریم‌ورکی مثل
+// React/Vue). هر صفحه‌ی HTML این فایل را <script src="app.js"> می‌کند و بر
+// اساس ویژگیِ data-page روی تگ <body> (نگاه کنید به انتهای همین فایل)،
+// تابعِ init مخصوصِ همان صفحه اجرا می‌شود.
+//
+// ساختار کلیِ فایل (از بالا به پایین):
+//   ۱) تنظیمات پایه (آدرس API، سلکتورهای DOM، کلیدهای localStorage)
+//   ۲) توابع کمکیِ ارتباط با API (apiRequest/apiGet/apiPost/apiDelete)
+//   ۳) توابع کمکیِ رابط کاربریِ مشترک (Toast، وضعیتِ اتصال، سایدبار)
+//   ۴) توابعِ مخصوص هر صفحه (داشبورد، درس‌ها، امتحان‌ها، ثبت مطالعه، برنامه)
+//   ۵) روترِ سبک در انتهای فایل که تابعِ init درست را صدا می‌زند
+// ----------------------------------------------------------------------------
+
+// آدرسِ پایه‌ی سرور بک‌اند (Django). چون فرانت‌اند و بک‌اند دو پروژه‌ی جدا
+// هستند، هر درخواست باید این آدرس را جلوی مسیرِ API بگذارد.
 const API_BASE = "http://127.0.0.1:8000";
+
+// نگاشتِ اسمِ خوانا -> مسیرِ واقعیِ API؛ این‌طوری اگر یک روز آدرسِ API عوض
+// شود، فقط همین‌جا را باید ویرایش کرد، نه همه‌جای کد را.
 const endpoints = {
     login: "/api/auth/login/",
     register: "/api/auth/register/",
@@ -13,6 +33,7 @@ const endpoints = {
     studyLogDetail: (id) => `/api/study-logs/${id}/`,
 };
 
+// سلکتورهای CSS برای عناصرِ مشترک بین همه‌ی صفحات (نوار وضعیت، دکمه‌ی خروج و...)
 const selectors = {
     toast: "#toast",
     userGreeting: "#userGreeting",
@@ -23,11 +44,14 @@ const selectors = {
     backdrop: "#backdrop",
 };
 
+// کلیدهایی که با آن‌ها اطلاعاتِ نشست (Session) در localStorage مرورگر ذخیره می‌شود
 const storageKeys = {
     token: "ssp_token",
     username: "ssp_username",
 };
 
+// --- توابع کوچکِ خواندن/نوشتن/پاک‌کردنِ localStorage ---
+// (توکنِ JWT و نامِ کاربری بعد از ورود، همین‌جا نگه‌داری می‌شوند)
 const getToken = () => localStorage.getItem(storageKeys.token);
 const setToken = (token) => localStorage.setItem(storageKeys.token, token);
 const clearToken = () => localStorage.removeItem(storageKeys.token);
@@ -35,40 +59,58 @@ const setStoredUsername = (username) => localStorage.setItem(storageKeys.usernam
 const getStoredUsername = () => localStorage.getItem(storageKeys.username);
 const clearStoredUsername = () => localStorage.removeItem(storageKeys.username);
 
+// ---------------------------------------------------------------------
+// لایه‌ی ارتباط با API
+// ---------------------------------------------------------------------
+
 // نسخه اصلاح شده و هوشمند برای خواندن دقیق خطاهای جنگو
+// این تابع «مرکزیِ» همه‌ی درخواست‌هاست: همه‌ی توابعِ apiGet/apiPost/apiDelete
+// در نهایت همین تابع را صدا می‌زنند. مزیتش این است که هدرِ Authorization،
+// تبدیلِ بدنه به JSON، و مدیریتِ خطا فقط یک‌بار (نه در هر تابع جداگانه) نوشته می‌شود.
 const apiRequest = async (path, { method = "GET", body, headers = {}, skipAuth = false } = {}) => {
     const token = getToken();
 
     const finalHeaders = { ...headers };
+    // اگر توکن داریم و این درخواست نیاز به احراز هویت دارد (اکثرِ درخواست‌ها)،
+    // آن را در هدرِ استاندارد Authorization: Bearer <token> می‌گذاریم.
     if (!skipAuth && token) {
         finalHeaders.Authorization = `Bearer ${token}`;
     }
 
     let payload = body;
     if (body && !(body instanceof FormData)) {
+        // اگر بدنه یک آبجکتِ معمولی (نه FormData) است، به JSON تبدیلش می‌کنیم
         finalHeaders["Content-Type"] = "application/json";
         payload = JSON.stringify(body);
     }
 
+    // اگر مسیر از قبل یک URL کامل بود (با http شروع شود) همان را استفاده کن،
+    // وگرنه API_BASE را جلویش بچسبان.
     const response = await fetch(path.startsWith("http") ? path : `${API_BASE}${path}`, {
         method,
         headers: finalHeaders,
         body: payload ?? undefined,
     });
 
+    // کدِ ۲۰۴ یعنی «موفق ولی بدونِ محتوا» (مثلاً بعد از DELETE موفق)
     if (response.status === 204) {
         return null;
     }
 
+    // تلاش برای Parse کردنِ JSON؛ اگر پاسخ اصلاً JSON نبود، یک آبجکتِ خالی برگردان
     const data = await response.json().catch(() => ({}));
     
     if (!response.ok) {
+        // اگر پاسخ کدِ خطا داشت (400/401/403/...)، سعی می‌کنیم مناسب‌ترین پیامِ
+        // خطا را از بین شکل‌های مختلفی که DRF ممکن است برگرداند پیدا کنیم:
         let message = "خطایی رخ داده است.";
         if (data?.detail) {
             message = data.detail;
         } else if (data?.message) {
             message = data.message;
         } else if (typeof data === 'object' && Object.keys(data).length > 0) {
+            // حالتِ رایج در DRF: خطای اعتبارسنجیِ هر فیلد جدا برگردانده می‌شود
+            // (مثلاً {"username": ["این نام قبلاً ثبت شده"]})؛ اولین مورد را نشان می‌دهیم.
             const firstKey = Object.keys(data)[0];
             if (Array.isArray(data[firstKey])) {
                 message = `${firstKey}: ${data[firstKey][0]}`;
@@ -76,26 +118,39 @@ const apiRequest = async (path, { method = "GET", body, headers = {}, skipAuth =
                 message = JSON.stringify(data);
             }
         }
+        // با throw کردن یک خطا، توابعِ صدازننده (که این تابع را await کرده‌اند)
+        // می‌توانند با try/catch خطا را بگیرند و به کاربر Toast نشان دهند.
         throw new Error(message);
     }
 
     return data;
 };
 
+// سه Wrapper کوچک روی apiRequest، فقط برای خواناتر شدنِ کدِ صدازننده
+// (مثلاً apiGet(endpoints.subjects) به‌جای apiRequest(endpoints.subjects, {method: "GET"}))
 const apiGet = (path, options) => apiRequest(path, { ...options, method: "GET" });
 const apiPost = (path, body, options) => apiRequest(path, { ...options, method: "POST", body });
 const apiDelete = (path, options) => apiRequest(path, { ...options, method: "DELETE" });
 
+// ---------------------------------------------------------------------
+// توابع کمکیِ رابط کاربریِ مشترک
+// ---------------------------------------------------------------------
+
+// نمایشِ یک پیامِ کوچکِ موقت (Toast) در گوشه‌ی صفحه، برای موفقیت/خطا/اطلاع‌رسانی
 const showToast = (message, type = "info") => {
     const toast = document.querySelector(selectors.toast);
     if (!toast) return;
     toast.textContent = message;
     toast.classList.remove("is-visible");
     toast.dataset.type = type;
+    // requestAnimationFrame باعث می‌شود کلاسِ is-visible در فریمِ بعدی اضافه
+    // شود تا انیمیشنِ CSS (transition) واقعاً اجرا شود (نه این‌که چون کلاس
+    // همان لحظه اضافه شده، مرورگر انیمیشن را رد کند).
     requestAnimationFrame(() => toast.classList.add("is-visible"));
     setTimeout(() => toast.classList.remove("is-visible"), 4200);
 };
 
+// نمایشِ «سلام، فلانی» در بالای صفحه، بر اساس نام کاربریِ ذخیره‌شده در مرورگر
 const updateUserGreeting = () => {
     const label = document.querySelector(selectors.userGreeting);
     if (!label) return;
@@ -103,6 +158,7 @@ const updateUserGreeting = () => {
     label.textContent = username ? `👋 سلام، ${username}` : "سلام دوست عزیز";
 };
 
+// به‌روزرسانیِ نشانگرِ کوچکِ وضعیت (آنلاین/در حال پردازش/خارج از سیستم) در سایدبار
 const updateStatusIndicator = (status = "online") => {
     const statusText = document.querySelector(selectors.statusText);
     const dot = document.querySelector(selectors.statusDot);
@@ -133,18 +189,24 @@ const updateStatusIndicator = (status = "online") => {
     }
 };
 
+// اگر کاربر توکن ندارد (لاگین نکرده)، به‌زور به صفحه‌ی ورود می‌فرستیمش.
+// این تابع در ابتدای init هر صفحه‌ی محافظت‌شده صدا زده می‌شود.
 const requireAuth = () => {
     if (!getToken()) {
         window.location.href = "login.html";
     }
 };
 
+// خروج از حساب: پاک‌کردنِ توکن/نام کاربری از مرورگر و بازگشت به صفحه‌ی ورود
 const logout = () => {
     clearToken();
     clearStoredUsername();
     window.location.href = "login.html";
 };
 
+// رویدادهایی که در همه‌ی صفحات مشترک‌اند (دکمه‌ی خروج، باز/بسته‌شدنِ سایدبارِ
+// موبایل با دکمه‌ی همبرگری و کلیک روی پس‌زمینه‌ی تیره) + به‌روزرسانیِ اولیه‌ی
+// نام کاربری و وضعیتِ اتصال. تقریباً هر initXPage این تابع را صدا می‌زند.
 const bindGlobalEvents = () => {
     const logoutButton = document.querySelector(selectors.logoutButton);
     if (logoutButton) {
@@ -168,7 +230,15 @@ const bindGlobalEvents = () => {
     updateStatusIndicator();
 };
 
+// ---------------------------------------------------------------------
+// صفحه‌ی داشبورد (index.html)
+// ---------------------------------------------------------------------
+
+// داده‌ی JSON دریافتی از GET /api/dashboard/ را می‌گیرد و تمام پنل‌های
+// داشبورد (کارت‌های آماری، پیشرفتِ درس‌ها، تقویم امتحان‌ها، هشدارها،
+// نمودارِ تقسیم‌زمان) را با آن پر می‌کند.
 const renderDashboard = (data) => {
+    // چهار کارتِ آماریِ بالای صفحه؛ کلیدِ هر آبجکت همان id عنصرِ HTML است
     const totals = {
         totalSubjects: data?.total_subjects ?? 0,
         totalExams: data?.total_exams ?? 0,
@@ -181,6 +251,7 @@ const renderDashboard = (data) => {
         if (el) el.textContent = value;
     });
 
+    // پنل «پیشرفت درس‌ها»: برای هر درس یک نوارِ پیشرفت رسم می‌کنیم
     const progressList = document.getElementById("progressList");
     if (progressList) {
         progressList.innerHTML = "";
@@ -206,6 +277,7 @@ const renderDashboard = (data) => {
         }
     }
 
+    // پنل «تقویم مطالعه»: فهرستِ امتحان‌های پیشِ‌رو به ترتیبِ نزدیک‌ترین
     const timeline = document.getElementById("timelineList");
     if (timeline) {
         timeline.innerHTML = "";
@@ -226,6 +298,8 @@ const renderDashboard = (data) => {
         }
     }
 
+    // پنل «هشدارها و یادآوری‌ها»: هر آیتم بر اساس alert.type رنگ‌بندیِ متفاوتی
+    // می‌گیرد (قرمز=danger فوری، زرد=warning نزدیک، آبی=info یادآوریِ خنثی)
     const alertsList = document.getElementById("alertsList");
     if (alertsList) {
         alertsList.innerHTML = "";
@@ -235,6 +309,8 @@ const renderDashboard = (data) => {
         } else {
             alerts.forEach((alert) => {
                 const item = document.createElement("div");
+                // اگر نوعِ هشدار چیزی غیر از سه‌ حالتِ شناخته‌شده بود، برای
+                // ایمنی آن را «info» در نظر می‌گیریم (نه این‌که قرمز/داعیِ خطا نشان بدهد)
                 const validTypes = ["danger", "warning", "info"];
                 const alertType = validTypes.includes(alert.type) ? alert.type : "info";
                 item.className = `alert alert--${alertType}`;
@@ -247,6 +323,7 @@ const renderDashboard = (data) => {
         }
     }
 
+    // پنل «تقسیم‌زمان پیشنهادی»: نمودارِ میله‌ایِ سهمِ هر درس از هفته‌ی پیش‌رو
     const distribution = document.getElementById("studyDistribution");
     if (distribution) {
         const dist = Array.isArray(data?.study_distribution) ? data.study_distribution : [];
@@ -257,6 +334,7 @@ const renderDashboard = (data) => {
             dist.forEach((entry) => {
                 const bar = document.createElement("div");
                 bar.className = "mini-bar";
+                // حداقل ۶٪ ارتفاع می‌گذاریم تا حتی مقادیرِ خیلی کوچک هم دیده شوند
                 bar.style.height = `${Math.max(entry.percent, 6)}%`;
                 bar.title = `${entry.label}: ${entry.hours ?? 0} ساعت در هفته‌ی پیش‌رو`;
                 bar.innerHTML = `<span>${entry.label}</span>`;
@@ -266,6 +344,7 @@ const renderDashboard = (data) => {
     }
 };
 
+// درخواستِ داده از سرور و رندرِ کاملِ داشبورد؛ در initDashboardPage صدا زده می‌شود
 const loadDashboard = async () => {
     try {
         updateStatusIndicator("busy");
@@ -278,6 +357,12 @@ const loadDashboard = async () => {
     }
 };
 
+// ---------------------------------------------------------------------
+// صفحه‌ی درس‌ها (subjects.html)
+// ---------------------------------------------------------------------
+
+// مرتب‌سازیِ سمت-کلاینتِ فهرستِ درس‌ها (سرور همیشه فهرستِ خام را می‌فرستد،
+// ترتیبِ نمایش را خودِ فرانت‌اند بر اساس انتخابِ کاربر تعیین می‌کند)
 const sortSubjects = (subjects, key) => {
     const sorted = [...subjects];
     switch (key) {
@@ -324,6 +409,11 @@ const loadSubjects = async (sortKey = "name") => {
     }
 };
 
+// ---------------------------------------------------------------------
+// صفحه‌ی امتحان‌ها (exams.html)
+// ---------------------------------------------------------------------
+
+// پر کردنِ کشوی «انتخاب درس» در فرمِ ثبتِ امتحان (بر اساس درس‌های خودِ کاربر)
 const populateSubjectSelect = async () => {
     const select = document.getElementById("examSubject");
     if (!select) return;
@@ -361,6 +451,7 @@ const renderExams = (exams) => {
     exams.forEach((exam) => {
         const examDate = new Date(exam.exam_date);
         const diffTime = examDate - today;
+        // تبدیلِ اختلافِ میلی‌ثانیه‌ای به تعداد روز (۱۰۰۰ میلی‌ثانیه × ۶۰ ثانیه × ۶۰ دقیقه × ۲۴ ساعت)
         const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
         
         let daysText = "";
@@ -372,6 +463,7 @@ const renderExams = (exams) => {
             daysText = "گذشته";
         }
 
+        // برچسبِ اهمیت/فوریتِ امتحان، صرفاً برای نمایشِ بصریِ سریع در جدول
         let importanceLabel = "کم";
         if (diffDays >= 0 && diffDays <= 3) {
             importanceLabel = "خیلی زیاد 🔴";
@@ -399,6 +491,7 @@ const loadExams = async (filter = "upcoming") => {
         const exams = await apiGet(endpoints.exams);
         let filtered = [...exams];
         if (filter === "upcoming") {
+            // فقط امتحان‌هایی که تاریخ‌شان از امروز به بعد است نشان بده
             const today = new Date().toISOString().split("T")[0];
             filtered = filtered.filter((exam) => exam.exam_date >= today);
         }
@@ -413,6 +506,9 @@ const loadExams = async (filter = "upcoming") => {
 // ثبت مطالعه (StudyLog)
 // ---------------------------------------------------------------------
 
+// پر کردنِ کشوی «انتخاب امتحان» در فرمِ ثبتِ مطالعه؛ برای هر امتحان، ساعتِ
+// باقی‌مانده‌اش هم در متنِ گزینه نشان داده می‌شود تا کاربر بداند کدام
+// امتحان هنوز نیاز به مطالعه دارد.
 const populateExamSelectForLog = async () => {
     const select = document.getElementById("logExam");
     if (!select) return;
@@ -461,6 +557,8 @@ const renderStudyLogs = (logs) => {
         tbody.appendChild(row);
     });
 
+    // چون این دکمه‌های «حذف» بعد از رندر ساخته می‌شوند، رویدادشان را همین‌جا
+    // (بعد از innerHTML) اضافه می‌کنیم؛ نه در HTML اصلیِ صفحه.
     tbody.querySelectorAll("[data-log-id]").forEach((button) => {
         button.addEventListener("click", () => deleteStudyLog(button.dataset.logId));
     });
@@ -478,6 +576,7 @@ const loadStudyLogs = async () => {
 };
 
 const deleteStudyLog = async (id) => {
+    // چون حذفِ لاگ، ساعتِ کسرشده را برنمی‌گرداند، قبل از حذف حتماً تأیید می‌گیریم
     if (!confirm("این گزارش مطالعه حذف شود؟ (ساعتِ باقی‌مانده‌ی امتحان دوباره برنمی‌گردد)")) return;
     try {
         await apiDelete(endpoints.studyLogDetail(id));
@@ -512,8 +611,10 @@ const handleStudyLogForm = () => {
             await apiPost(endpoints.studyLogs, data);
             showToast("آفرین! گزارش مطالعه ثبت شد. 🎉", "success");
             form.reset();
+            // بعد از ثبت، تاریخ را دوباره روی «امروز» می‌گذاریم (چون form.reset آن را خالی می‌کند)
             const dateInput = document.getElementById("logDate");
             if (dateInput) dateInput.value = new Date().toISOString().split("T")[0];
+            // هم لیست گزارش‌ها و هم کشوی امتحان‌ها (که ساعتِ باقی‌مانده‌اش عوض شده) را تازه می‌کنیم
             await Promise.all([loadStudyLogs(), populateExamSelectForLog()]);
         } catch (error) {
             showToast(error.message, "error");
@@ -531,7 +632,15 @@ const initStudyLogPage = () => {
     loadStudyLogs();
 };
 
+// ---------------------------------------------------------------------
+// صفحه‌ی برنامه‌ی مطالعه (study_plan.html)
+// ---------------------------------------------------------------------
+
+// داده‌ی JSON دریافتی از GET /api/study-plan/ (شکل: {schedule, totals, ...})
+// را می‌گیرد و بلوک‌های برنامه (هرکدام شاملِ چند تسکِ درس/ساعت) را می‌سازد.
 const renderPlan = (plan) => {
+    // اگر کاربر همین الان مشغولِ تایپ در ورودیِ ساعتِ روزانه است، مقدارش را
+    // با داده‌ی تازه بازنویسی نکن (تا وسطِ تایپِ کاربر پاک نشود)
     const hoursInput = document.getElementById("dailyHoursInput");
     if (hoursInput && plan?.daily_available_hours != null && document.activeElement !== hoursInput) {
         hoursInput.value = plan.daily_available_hours;
@@ -544,6 +653,8 @@ const renderPlan = (plan) => {
     const items = plan?.schedule ?? [];
 
     if (!items.length) {
+        // پیامِ خودِ بک‌اند (مثلاً «هیچ امتحان آینده‌ای وجود ندارد») را نشان بده،
+        // یا اگر نبود، یک پیامِ عمومی
         container.innerHTML = `<p class="empty-state">${plan?.message ?? "داده‌ای برای نمایش وجود ندارد."}</p>`;
         const total = document.getElementById("totalRecommended");
         if (total) total.textContent = "0 ساعت";
@@ -557,6 +668,8 @@ const renderPlan = (plan) => {
     items.forEach((entry) => {
         const block = document.createElement("div");
         block.className = "plan-block";
+        // اگر این بلوک چند روز را ادغام کرده (days_covered > 1)، یک برچسبِ
+        // کوچک («۴ روز») کنارِ عنوان نشان بده
         const daysChip = entry.days_covered > 1 ? `<span class="plan-days-chip">${entry.days_covered} روز</span>` : "";
         block.innerHTML = `
             <div class="plan-header">
@@ -581,6 +694,7 @@ const renderPlan = (plan) => {
         container.appendChild(block);
     });
 
+    // خلاصه‌ی پایینِ صفحه: مجموع ساعات پیشنهادی، میانگین روزانه و پرکارترین درس‌ها
     const total = document.getElementById("totalRecommended");
     if (total) total.textContent = `${plan?.totals?.recommended_hours ?? 0} ساعت`;
 
@@ -604,6 +718,7 @@ const renderPlan = (plan) => {
     }
 };
 
+// دریافتِ برنامه برای یک بازه‌ی مشخص («daily» یا «weekly») و رندرِ آن
 const loadStudyPlan = async (range = "daily") => {
     try {
         updateStatusIndicator("busy");
@@ -614,6 +729,10 @@ const loadStudyPlan = async (range = "daily") => {
         showToast(error.message, "error");
     }
 };
+
+// ---------------------------------------------------------------------
+// صفحات ورود / ثبت‌نام
+// ---------------------------------------------------------------------
 
 const handleLogin = () => {
     const form = document.getElementById("loginForm");
@@ -630,6 +749,7 @@ const handleLogin = () => {
         }
 
         try {
+            // skipAuth: true چون هنوز توکنی نداریم که در هدر بفرستیم
             const data = await apiPost(endpoints.login, { username, password }, { skipAuth: true });
             setToken(data.access);
             setStoredUsername(username);
@@ -657,6 +777,7 @@ const handleRegister = () => {
 
             showToast("ثبت‌نام با موفقیت انجام شد!", "success");
 
+            // بعد از ثبت‌نامِ موفق، دکمه‌ی فرم را تبدیل به یک لینکِ «ورود به حساب» می‌کنیم
             const actionBtn = document.getElementById("authActionBtn");
             if (actionBtn) {
                 actionBtn.textContent = "ورود به حساب"; 
@@ -679,6 +800,10 @@ const handleRegister = () => {
         }
     });
 };
+
+// ---------------------------------------------------------------------
+// فرم‌های ثبتِ درس و امتحان
+// ---------------------------------------------------------------------
 
 const handleSubjectForm = () => {
     const form = document.getElementById("subjectForm");
@@ -742,6 +867,10 @@ const handleExamForm = () => {
     });
 };
 
+// ---------------------------------------------------------------------
+// توابعِ init هر صفحه (هرکدام: requireAuth + bindGlobalEvents + کارِ مخصوصِ صفحه)
+// ---------------------------------------------------------------------
+
 const initDashboardPage = () => {
     requireAuth();
     bindGlobalEvents();
@@ -772,8 +901,10 @@ const initExamsPage = () => {
     loadExams(filterSelect?.value ?? "upcoming");
 };
 
+// دکمه‌ی «روزانه/هفتگی» که در حال حاضر کلاسِ is-active دارد را پیدا می‌کند
 const getActiveRange = () => document.querySelector(".toggle-button.is-active")?.dataset.range ?? "daily";
 
+// فرمِ تنظیمِ «ساعت آزاد روزانه» در صفحه‌ی برنامه‌ی مطالعه
 const handleDailyHoursForm = () => {
     const form = document.getElementById("dailyHoursForm");
     if (!form) return;
@@ -791,6 +922,8 @@ const handleDailyHoursForm = () => {
             updateStatusIndicator("busy");
             await apiPost(endpoints.studyPlanGenerate, { daily_available_hours: dailyHours });
             showToast("برنامه مطالعه به‌روزرسانی شد.", "success");
+            // بعد از تولیدِ مجدد، برنامه را دوباره برای همان بازه‌ای که کاربر
+            // در حالِ مشاهده‌اش بود (روزانه یا هفتگی) بارگذاری می‌کنیم
             await loadStudyPlan(getActiveRange());
             updateStatusIndicator("online");
         } catch (error) {
@@ -814,6 +947,12 @@ const initStudyPlanPage = () => {
     });
     loadStudyPlan("daily");
 };
+
+// ---------------------------------------------------------------------
+// روترِ سبک: بر اساس ویژگیِ data-page روی <body> هر صفحه، تابعِ init
+// مخصوصِ همان صفحه را صدا می‌زند. این جایگزینِ یک کتابخانه‌ی Routing واقعی
+// (که برای این پروژه اضافی بود) است.
+// ---------------------------------------------------------------------
 
 document.addEventListener("DOMContentLoaded", () => {
     const page = document.body.dataset.page;
@@ -844,4 +983,3 @@ document.addEventListener("DOMContentLoaded", () => {
             bindGlobalEvents();
     }
 });
-
