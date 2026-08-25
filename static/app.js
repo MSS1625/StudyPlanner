@@ -407,8 +407,13 @@ const renderSubjects = (subjects) => {
 
     subjects.forEach((subject) => {
         const row = document.createElement('tr');
+        // یادداشتِ درس (اگر وجود داشته باشد) به‌صورتِ زیرنویسِ کم‌رنگ زیرِ نام
+        // درس نمایش داده می‌شود؛ ستونِ جدول اضافه نمی‌شود تا چیدمان حفظ شود.
+        const notesMarkup = subject.notes
+            ? `<br><small class="text-muted">${subject.notes}</small>`
+            : '';
         row.innerHTML = `
-            <td>${subject.name}</td>
+            <td>${subject.name}${notesMarkup}</td>
             <td>${subject.difficulty}/5</td>
             <td>${Math.round(subject.progress_percent ?? 0)}%</td>
             <td>${subject.target_score ?? '-'}</td>
@@ -865,18 +870,20 @@ const handleSubjectForm = () => {
 
     form.addEventListener('submit', async (event) => {
         event.preventDefault();
+        // فیلدِ total_hours حذف شد: ساعت‌های مطالعه در سطحِ امتحان دنبال می‌شوند
+        // و فیلدِ محاسباتیِ total_hours سریالایزر از همان‌جا مشتق می‌شود (رفعِ فیلد یتیم).
+        // notes از این پس یک فیلد واقعیِ مدل Subject است و واقعاً ذخیره می‌شود.
         const formData = {
             name: form.name.value.trim(),
             difficulty: Number(form.difficulty.value),
             target_score: form.target_score.value
                 ? Number(form.target_score.value)
                 : null,
-            total_hours: Number(form.total_hours.value),
             notes: form.notes.value.trim(),
         };
 
-        if (!formData.name || !formData.total_hours) {
-            showToast('لطفاً نام درس و حجم مطالعه را پر کنید.', 'error');
+        if (!formData.name) {
+            showToast('لطفاً نام درس را وارد کنید.', 'error');
             return;
         }
 
@@ -891,6 +898,22 @@ const handleSubjectForm = () => {
             showToast(error.message, 'error');
         }
     });
+};
+
+// بازنشانیِ فرمِ امتحان به حالتِ «ثبتِ جدید».
+// این تابع قبلاً در exams.html (دکمه‌ی مخفیِ «انصراف») ارجاع داده می‌شد ولی
+// تعریف نشده بود (ReferenceErrorِ بالقوه — رفع شد). علاوه بر پاک‌کردنِ فیلدها،
+// ورودیِ مخفیِ examId را خالی می‌کند و دکمه‌ی «انصراف» را دوباره مخفی می‌کند؛
+// این همان رفتاری است که قابلیتِ «ویرایشِ امتحان» (TODO) از آن انتظار دارد.
+const resetExamForm = () => {
+    const form = document.getElementById('examForm');
+    if (form) form.reset();
+
+    const examIdInput = document.getElementById('examId');
+    if (examIdInput) examIdInput.value = '';
+
+    const cancelBtn = document.getElementById('cancelExamEditBtn');
+    if (cancelBtn) cancelBtn.style.display = 'none';
 };
 
 const handleExamForm = () => {

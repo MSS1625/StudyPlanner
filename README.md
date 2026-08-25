@@ -185,6 +185,7 @@ erDiagram
         string name
         int difficulty "1 تا 5"
         float target_grade "اختیاری، 0 تا 20"
+        text notes "اختیاری، از Migration 0005"
     }
     EXAM {
         int id

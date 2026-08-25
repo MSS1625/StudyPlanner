@@ -83,8 +83,11 @@
 
                 <!-- فرمِ افزودنِ درسِ جدید؛ submit آن در handleSubjectForm()
                      (app.js) گرفته و به POST /api/subjects/ فرستاده می‌شود.
-                     نکته: total_hours و notes فعلاً در بک‌اند ذخیره نمی‌شوند
-                     (مدلِ Subject چنین فیلدهایی ندارد) -->
+                     فیلدِ «حجم کل ساعات» (total_hours) حذف شد: ساعت‌های مطالعه در این
+                     سیستم در سطحِ امتحان (Exam.study_hours_remaining) دنبال می‌شوند و
+                     فیلدِ محاسباتیِ total_hours در سریالایزر هم از همان‌جا مشتق می‌شود؛
+                     ورودیِ دستیِ هم‌نام فقط داده‌ی گمراه‌کننده بود (رفعِ فیلد یتیم).
+                     notes از این پس واقعاً در مدل ذخیره می‌شود. -->
                 <section class="panel">
                     <header class="panel__header">
                         <h3>افزودن درس جدید</h3>
@@ -101,10 +104,6 @@
                         <div class="form-field">
                             <label for="subjectTarget">هدف نمره (اختیاری)</label>
                             <input type="number" id="subjectTarget" name="target_score" min="0" max="20" placeholder="مثلاً 18">
-                        </div>
-                        <div class="form-field">
-                            <label for="subjectHours">حجم کل ساعات مطالعه</label>
-                            <input type="number" id="subjectHours" name="total_hours" min="1" placeholder="مثلاً 40" required>
                         </div>
                         <div class="form-field form-field--full">
                             <label for="subjectNotes">یادداشت کوتاه</label>
@@ -127,7 +126,7 @@
                             <label>
                                 <span>مرتب‌سازی بر اساس:</span>
                                 <select id="subjectSort">
-                                    آ<option value="name">حروف الفبا</option>
+                                    <option value="name">حروف الفبا</option>
                                     <option value="difficulty">سختی</option>
                                     <option value="progress">پیشرفت</option>
                                 </select>

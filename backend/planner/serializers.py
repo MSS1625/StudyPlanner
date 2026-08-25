@@ -66,7 +66,9 @@ class SubjectSerializer(serializers.ModelSerializer):
         model = Subject
         # این‌ها فیلدهایی هستند که مستقیماً از مدل خوانده/نوشته می‌شوند؛
         # فیلدهای محاسباتی (progress_percent و...) پایین‌تر جداگانه اضافه می‌شوند.
-        fields = ['id', 'name', 'difficulty', 'target_score']
+        # notes از این پس یک فیلد واقعیِ مدل است (قبلاً فرم می‌فرستاد ولی نادیده
+        # گرفته می‌شد — رفعِ فیلد یتیم).
+        fields = ['id', 'name', 'difficulty', 'target_score', 'notes']
 
     def to_representation(self, instance):
         """
