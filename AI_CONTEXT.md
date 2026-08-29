@@ -46,7 +46,8 @@ django-cors-headers>=4.4
 | `utils.py` | **قلبِ الگوریتمی**: `compute_subject_progress`, `generate_study_plan`, `format_plan_for_frontend`, `build_subject_distribution` |
 | `admin.py` | ثبتِ مدل‌ها در پنلِ `/admin/` |
 | `management/commands/seed_demo_data.py` | دستورِ تولیدِ داده‌ی نمونه برای تست |
-| `migrations/0001` تا `0004` | تاریخچه‌ی واقعیِ تکاملِ اسکیمای دیتابیس (تاریخ‌ها در `CHANGELOG.md`) |
+| `tests.py` | ۶۲ تستِ خودکارِ Django/DRF (از 2026-08-29): هفت کلاس از Auth تا الگوریتم؛ اجرا با `python manage.py test planner` |
+| `migrations/0001` تا `0006` | تاریخچه‌ی واقعیِ تکاملِ اسکیمای دیتابیس (تاریخ‌ها در `CHANGELOG.md`) |
 
 ### فرانت‌اند (`static/`)
 
