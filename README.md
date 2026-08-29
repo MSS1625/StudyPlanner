@@ -192,6 +192,7 @@ erDiagram
         date exam_date
         int chapters_remaining
         float study_hours_remaining
+        text notes "اختیاری، از Migration 0006"
     }
     STUDYLOG {
         int id

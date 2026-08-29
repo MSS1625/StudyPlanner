@@ -107,6 +107,15 @@ class Exam(models.Model):
         validators=[MinValueValidator(0)],default=0.0,
         help_text="ساعت مطالعه باقی‌مانده"
     )
+
+    # یادداشتِ اختیاری درباره‌ی امتحان (مثلاً «میان‌ترم، سالنِ ۲، chapters 1-5»).
+    # (فیلدِ یتیمِ فرم — رفع شد): فرمِ امتحان در exams.html از قبل یک textarea
+    # یادداشت داشت که مقدارش بی‌صدا دور ریخته می‌شد؛ الگوی آن از Subject.notes
+    # و StudyLog.notes گرفته شده است. با قابلیتِ «ویرایشِ امتحان» کامل شد.
+    notes = models.TextField(
+        blank=True, null=True, help_text="یادداشت اختیاری درباره‌ی امتحان"
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

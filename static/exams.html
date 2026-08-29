@@ -1,8 +1,9 @@
 <!--
     static/exams.html — صفحه‌ی مدیریت امتحان‌ها
     data-page="exams" -> initExamsPage() در app.js: پرکردنِ کشوی «انتخاب
-    درس» (populateSubjectSelect)، فرمِ ثبتِ امتحان (handleExamForm)، و
-    جدولِ فهرستِ امتحان‌ها با فیلترِ آینده/همه (loadExams/renderExams).
+    درس» (populateSubjectSelect)، فرمِ ثبت/ویرایشِ امتحان (handleExamForm — با examId پر،
+    submit به PATCH /api/exams/{id}/ می‌رود)، دکمه‌ی «ویرایش» روی ردیف‌ها
+    (startExamEdit) و جدولِ فهرست با فیلترِ آینده/همه (loadExams/renderExams).
 -->
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
@@ -77,15 +78,18 @@
             <div class="page-content">
                 <div id="toast" class="toast" role="alert"></div>
 
-                <!-- فرمِ ثبتِ امتحانِ جدید؛ submit آن در handleExamForm() (app.js)
-                     گرفته و به POST /api/exams/ فرستاده می‌شود -->
+                <!-- فرمِ ثبت/ویرایشِ امتحان؛ submit آن در handleExamForm() (app.js)
+                     گرفته می‌شود: اگر examId خالی باشد POST /api/exams/ و اگر پر
+                     باشد PATCH /api/exams/{id}/ فرستاده می‌شود. کلاس‌های فرم با
+                     styles.css هم‌راستا شدند (قبلاً form-group/full-width/btn
+                     بودند که در CSS تعریف نشده بودند و فرم بی‌استایل می‌ماند) -->
                 <section class="panel">
                     <header class="panel__header">
-                        <h3>ثبت امتحان یا ددلاین</h3>
+                        <h3 id="examFormTitle">ثبت امتحان یا ددلاین</h3>
                     </header>
 
                     <form id="examForm" class="form-grid">
-                        <div class="form-group">
+                        <div class="form-field">
                             <label for="examSubject">انتخاب درس:</label>
                             <select id="examSubject" name="subject" required>
                                 <option value="" disabled selected>ابتدا درس را انتخاب کنید</option>
@@ -93,37 +97,35 @@
                             </select>
                         </div>
                         
-                        <div class="form-group">
+                        <div class="form-field">
                             <label for="exam_date">تاریخ امتحان یا ددلاین:</label>
                             <input type="date" id="exam_date" name="exam_date" required>
                         </div>
 
-                        <div class="form-group">
+                        <div class="form-field">
                             <label for="chapters_remaining">تعداد فصل/بخش باقی‌مانده:</label>
                             <input type="number" id="chapters_remaining" name="chapters_remaining" min="1" required placeholder="مثلا: ۵">
                         </div>
 
-                        <div class="form-group">
+                        <div class="form-field">
                             <label for="study_hours_remaining">ساعت مطالعه تخمینی باقی‌مانده:</label>
                             <input type="number" id="study_hours_remaining" name="study_hours_remaining" min="1" required placeholder="مثلا: ۲۰">
                         </div>
 
-                        <div class="form-group full-width">
+                        <div class="form-field form-field--full">
                             <label for="note">یادداشت (اختیاری):</label>
-                            <textarea id="note" name="note" rows="2"></textarea>
+                            <textarea id="note" name="notes" rows="2" placeholder="مثلاً: میان‌ترم، سالنِ ۲، فصل‌های ۱ تا ۵"></textarea>
                         </div>
 
-                        <!-- examId و دکمه‌ی «انصراف» برای حالتِ ویرایشِ امتحان
-                             در نظر گرفته شده‌اند. تابعِ resetExamForm() از این پس
-                             در app.js تعریف شده است (رفعِ ReferenceErrorِ بالقوه)،
-                             ولی خودِ قابلیتِ ویرایش هنوز کامل نیست: دکمه‌ی
-                             «ویرایش» روی ردیف‌های جدول وجود ندارد و handleExamForm
-                             هنوز حالتِ PATCH را تشخیص نمی‌دهد (به TODO.md نگاه کنید) -->
+                        <!-- examId و دکمه‌ی «انصراف از ویرایش» مخصوصِ حالتِ ویرایشند:
+                             startExamEdit (app.js) فرم را پر می‌کند، examId را ست
+                             می‌کند و این دکمه را نشان می‌دهد؛ resetExamForm که به
+                             کلیکِ آن هم بسته شده، همه‌چیز را به حالتِ ثبت برمی‌گرداند -->
                         <input type="hidden" id="examId" name="examId">
                         
-                        <div class="form-actions full-width">
-                            <button type="submit" class="btn btn-primary">ذخیره امتحان</button>
-                            <button type="button" class="btn btn-secondary" onclick="resetExamForm()" style="display: none;" id="cancelExamEditBtn">انصراف</button>
+                        <div class="form-actions">
+                            <button type="submit" class="primary-button">ذخیره امتحان</button>
+                            <button type="button" class="ghost-button" style="display: none;" id="cancelExamEditBtn">انصراف از ویرایش</button>
                         </div>
                     </form>
 
@@ -131,7 +133,9 @@
                 </section>
 
                 <!-- فهرستِ امتحان‌ها؛ examTableBody با renderExams() (app.js) پر
-                     می‌شود. تغییرِ select زیر، loadExams() را با فیلترِ جدید صدا می‌زند -->
+                     می‌شود. هر ردیف یک دکمه‌ی «ویرایش» دارد که startExamEdit را
+                     صدا می‌زند و فرمِ بالای صفحه را با داده‌های آن امتحان پر می‌کند.
+                     تغییرِ select زیر، loadExams() را با فیلترِ جدید صدا می‌زند -->
                 <section class="panel">
                     <header class="panel__header">
                         <h3>فهرست امتحان‌ها</h3>
@@ -154,11 +158,12 @@
                                     <th>ساعت باقی‌مانده</th>
                                     <th>درجه اهمیت</th>
                                     <th>وضعیت</th>
+                                    <th>عملیات</th>
                                 </tr>
                             </thead>
                             <tbody id="examTableBody">
                                 <tr>
-                                    <td colspan="5" class="empty-state">هنوز امتحانی ثبت نشده است.</td>
+                                    <td colspan="6" class="empty-state">هنوز امتحانی ثبت نشده است.</td>
                                 </tr>
                             </tbody>
                         </table>

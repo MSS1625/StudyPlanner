@@ -133,18 +133,35 @@ const apiRequest = async (
     return data;
 };
 
-// سه Wrapper کوچک روی apiRequest، فقط برای خواناتر شدنِ کدِ صدازننده
+// Wrapperهای کوچک روی apiRequest، فقط برای خواناتر شدنِ کدِ صدازننده
 // (مثلاً apiGet(endpoints.subjects) به‌جای apiRequest(endpoints.subjects, {method: "GET"}))
 const apiGet = (path, options) =>
     apiRequest(path, { ...options, method: 'GET' });
 const apiPost = (path, body, options) =>
     apiRequest(path, { ...options, method: 'POST', body });
+// PATCH برای ویرایشِ جزئیِ یک منبع (مثلاً ویرایشِ امتحان)؛ بدنه‌ی کامل فرستاده
+// می‌شود ولی PATCH اجازه می‌دهد فیلدهای ارسالی همان‌ها اعمال شوند.
+const apiPatch = (path, body, options) =>
+    apiRequest(path, { ...options, method: 'PATCH', body });
 const apiDelete = (path, options) =>
     apiRequest(path, { ...options, method: 'DELETE' });
 
 // ---------------------------------------------------------------------
 // توابع کمکیِ رابط کاربریِ مشترک
 // ---------------------------------------------------------------------
+
+// گریختن (Escape) از کاراکترهای خاصِ HTML؛ برای هرجایی که داده‌ی کاربر با
+// innerHTML رندر می‌شود لازم است تا متنِ کاربر نتواند به‌عنوانِ HTML تفسیر
+// شود (جلوگیری از XSS). فعلاً renderExams (نامِ درس و یادداشتِ امتحان)
+// از آن استفاده می‌کند؛ پاکسازیِ کاملِ بقیه‌ی رندرها آیتمِ جداگانه‌ای در
+// TODO.md است.
+const escapeHtml = (value) =>
+    String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
 
 // نمایشِ یک پیامِ کوچکِ موقت (Toast) در گوشه‌ی صفحه، برای موفقیت/خطا/اطلاع‌رسانی
 const showToast = (message, type = 'info') => {
@@ -467,7 +484,7 @@ const renderExams = (exams) => {
 
     if (exams.length === 0) {
         tbody.innerHTML =
-            "<tr><td colspan='5' class='text-center'>هیچ امتحانی یافت نشد.</td></tr>";
+            "<tr><td colspan='6' class='text-center'>هیچ امتحانی یافت نشد.</td></tr>";
         return;
     }
 
@@ -499,16 +516,64 @@ const renderExams = (exams) => {
             importanceLabel = 'کم 🟢';
         }
 
+        // یادداشتِ امتحان (اگر باشد) به‌صورتِ زیرنویسِ کم‌رنگ زیرِ نام درس —
+        // همان الگوی جدولِ درس‌ها؛ چیدمانِ جدول حفظ می‌شود.
+        const notesMarkup = exam.notes
+            ? `<br><small class="text-muted">${escapeHtml(exam.notes)}</small>`
+            : '';
+
         const row = document.createElement('tr');
         row.innerHTML = `
-            <td>${exam.subject_name ?? exam.subject}</td>
+            <td>${escapeHtml(exam.subject_name ?? String(exam.subject ?? ''))}${notesMarkup}</td>
             <td>${exam.exam_date} <br> <small class="text-muted">${daysText}</small></td>
             <td>${exam.study_hours_remaining ?? 0} ساعت</td>
             <td>${importanceLabel}</td>
             <td>${diffDays < 0 ? 'پایان یافته' : 'برنامه‌ریزی نشده'}</td>
+            <td></td>
         `;
+
+        // سلولِ «عملیات»: دکمه‌ی ویرایش با گوشه‌دادنِ آبجکتِ exam از طریقِ
+        // closure — همان الگوی دکمه‌های «حذف» در renderStudyLogs.
+        const actionsTd = row.lastElementChild;
+        const editBtn = document.createElement('button');
+        editBtn.type = 'button';
+        editBtn.className = 'ghost-button ghost-button--sm';
+        editBtn.textContent = 'ویرایش';
+        editBtn.addEventListener('click', () => startExamEdit(exam));
+        actionsTd.appendChild(editBtn);
+
         tbody.appendChild(row);
     });
+};
+
+// ورود به «حالتِ ویرایش»: فرمِ امتحان با داده‌های امتحانِ انتخاب‌شده پر
+// می‌شود، examId ست می‌شود و ظاهرِ فرم (عنوانِ پنل، متنِ دکمه‌ی ذخیره و
+// دکمه‌ی انصراف) به حالتِ ویرایش می‌رود. submit بعدی به‌جای POST به
+// PATCH /api/exams/{id}/ می‌رود (تشخیص در handleExamForm).
+const startExamEdit = (exam) => {
+    const form = document.getElementById('examForm');
+    if (!form) return;
+
+    form.elements.subject.value = String(exam.subject);
+    form.elements.exam_date.value = exam.exam_date;
+    form.elements.chapters_remaining.value = exam.chapters_remaining;
+    form.elements.study_hours_remaining.value = exam.study_hours_remaining;
+    if (form.elements.notes) form.elements.notes.value = exam.notes ?? '';
+
+    const examIdInput = document.getElementById('examId');
+    if (examIdInput) examIdInput.value = exam.id;
+
+    const cancelBtn = document.getElementById('cancelExamEditBtn');
+    if (cancelBtn) cancelBtn.style.display = '';
+
+    const submitBtn = form.querySelector('button[type="submit"]');
+    if (submitBtn) submitBtn.textContent = 'به‌روزرسانی امتحان';
+
+    const panelTitle = document.getElementById('examFormTitle');
+    if (panelTitle) panelTitle.textContent = 'ویرایش امتحان';
+
+    // جدول پایینِ فرم است؛ کاربر را به فرمِ پرشده ببریم تا تغییرات را ببیند
+    form.scrollIntoView({ behavior: 'smooth', block: 'start' });
 };
 
 const loadExams = async (filter = 'upcoming') => {
@@ -900,11 +965,10 @@ const handleSubjectForm = () => {
     });
 };
 
-// بازنشانیِ فرمِ امتحان به حالتِ «ثبتِ جدید».
-// این تابع قبلاً در exams.html (دکمه‌ی مخفیِ «انصراف») ارجاع داده می‌شد ولی
-// تعریف نشده بود (ReferenceErrorِ بالقوه — رفع شد). علاوه بر پاک‌کردنِ فیلدها،
-// ورودیِ مخفیِ examId را خالی می‌کند و دکمه‌ی «انصراف» را دوباره مخفی می‌کند؛
-// این همان رفتاری است که قابلیتِ «ویرایشِ امتحان» (TODO) از آن انتظار دارد.
+// بازنشانیِ فرمِ امتحان به حالتِ «ثبتِ جدید». فرم و examId را خالی می‌کند،
+// دکمه‌ی «انصراف» را مخفی می‌کند و عنوانِ پنل و متنِ دکمه‌ی submit را به
+// حالتِ ثبت برمی‌گرداند — یعنی دقیقاً معکوسِ کاری که startExamEdit می‌کند.
+// این تابع هم بعد از «انصراف» از ویرایش و هم بعد از ثبت/ویرایشِ موفق صدا زده می‌شود.
 const resetExamForm = () => {
     const form = document.getElementById('examForm');
     if (form) form.reset();
@@ -914,6 +978,12 @@ const resetExamForm = () => {
 
     const cancelBtn = document.getElementById('cancelExamEditBtn');
     if (cancelBtn) cancelBtn.style.display = 'none';
+
+    const submitBtn = form?.querySelector('button[type="submit"]');
+    if (submitBtn) submitBtn.textContent = 'ذخیره امتحان';
+
+    const panelTitle = document.getElementById('examFormTitle');
+    if (panelTitle) panelTitle.textContent = 'ثبت امتحان یا ددلاین';
 };
 
 const handleExamForm = () => {
@@ -924,6 +994,9 @@ const handleExamForm = () => {
         event.preventDefault();
 
         const formData = new FormData(form);
+        // اگر examId پر باشد یعنی کاربر در «حالتِ ویرایش» است: به‌جای POST،
+        // درخواست به PATCH /api/exams/{id}/ می‌رود (تشخیصِ حالت فقط همین‌جاست).
+        const examId = formData.get('examId');
 
         const data = {
             subject: Number(formData.get('subject')),
@@ -932,6 +1005,8 @@ const handleExamForm = () => {
             study_hours_remaining: Number(
                 formData.get('study_hours_remaining'),
             ),
+            // فیلدِ یادداشت — قبلاً یتیم بود و بی‌صدا دور ریخته می‌شد (رفع شد)
+            notes: formData.get('notes')?.trim() || '',
         };
 
         if (
@@ -945,9 +1020,15 @@ const handleExamForm = () => {
         }
 
         try {
-            await apiPost(endpoints.exams, data);
-            showToast('امتحان با موفقیت ثبت شد.', 'success');
-            form.reset();
+            if (examId) {
+                await apiPatch(endpoints.examDetail(examId), data);
+                showToast('امتحان با موفقیت به‌روزرسانی شد.', 'success');
+            } else {
+                await apiPost(endpoints.exams, data);
+                showToast('امتحان با موفقیت ثبت شد.', 'success');
+            }
+            // در هر دو حالت (ثبتِ جدید یا ویرایش) فرم به حالتِ اولیه برمی‌گردد
+            resetExamForm();
             await loadExams(
                 document.getElementById('examFilter')?.value ?? 'upcoming',
             );
@@ -987,6 +1068,12 @@ const initExamsPage = () => {
     requireAuth();
     bindGlobalEvents();
     handleExamForm();
+    // دکمه‌ی «انصراف» از ویرایش: خروج از حالتِ ویرایش بدونِ ذخیره (قبلاً
+    // onclick درون‌خطی در exams.html بود؛ برای هم‌راستا شدنِ با الگویِ
+    // بقیه‌ی صفحه‌ها، اینجا با addEventListener بسته می‌شود)
+    document
+        .getElementById('cancelExamEditBtn')
+        ?.addEventListener('click', resetExamForm);
     populateSubjectSelect();
     const filterSelect = document.getElementById('examFilter');
     if (filterSelect) {

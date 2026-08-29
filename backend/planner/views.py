@@ -122,6 +122,20 @@ class ExamViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("شما مجاز به ایجاد امتحان برای این درس نیستید")
         serializer.save()
 
+    def perform_update(self, serializer):
+        # همان بررسیِ امنیتیِ perform_create، این‌بار برای ویرایش: اگر کاربر
+        # در ویرایشِ امتحان، درسِ آن را به درسی از کاربرِ دیگری تغییر دهد،
+        # اینجا رد می‌شود (بدونِ این بررسی، ModelViewSet در update استاندارد
+        # مالکیتِ «درسِ جدید» را کنترل نمی‌کرد و مهاجم می‌توانست امتحانش را
+        # به درسِ دیگری قفل کند). توجه: get_queryset خودِ امتحان را از قبل
+        # به امتحان‌های همین کاربر محدود می‌کند.
+        subject = serializer.validated_data.get(
+            'subject', serializer.instance.subject
+        )
+        if subject.user != self.request.user:
+            raise PermissionDenied("شما مجاز به تغییرِ درسِ این امتحان نیستید")
+        serializer.save()
+
 
 class StudyLogViewSet(viewsets.ModelViewSet):
     serializer_class = StudyLogSerializer
