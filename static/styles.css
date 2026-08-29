@@ -628,6 +628,171 @@ textarea {
 }
 
 /* --------------------------------------------------------------------
+   دکمه‌های عملیات روی سطحِ سفید (ویرایش / حذف / انصراف از ویرایش)
+   نکته: .ghost-button برای سایدبارِ تیره طراحی شده (سفیدِ نیمه‌شفاف روی
+   آبی) و روی پنل‌های سفیدِ محتوا تقریباً نامرئی است؛ بنابراین:
+   ۱) قانونِ «.panel .ghost-button» نسخه‌ی سطحِ روشن را برای دکمه‌های
+      ghostِ داخلِ پنل‌ها می‌سازد (پاک‌سازی / به‌روزرسانی)؛ دکمه‌های
+      toggle که طراحیِ خاصِ خودشان را دارند مستثنی‌اند.
+   ۲) دکمه‌های عملیاتِ جدول/فرم کلاس‌های اختصاصیِ قرصیِ زیر را می‌گیرند؛
+      آیکون‌های SVG با CSS mask رندر می‌شوند تا رنگشان با currentColor
+      (رنگِ متنِ دکمه) هماهنگ بماند و روی hover هم تغییر کند.
+   -------------------------------------------------------------------- */
+
+.panel .ghost-button:not(.toggle-button) {
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    box-shadow: 0 8px 18px -14px rgba(38, 51, 88, 0.35);
+}
+
+.panel .ghost-button:not(.toggle-button):hover {
+    background: rgba(56, 102, 242, 0.06);
+    border-color: rgba(56, 102, 242, 0.35);
+    color: var(--primary);
+    transform: translateY(-1px);
+}
+
+.panel .ghost-button:not(.toggle-button):active {
+    transform: translateY(0);
+}
+
+.panel .ghost-button:not(.toggle-button):focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+}
+
+/* دکمه‌ی «ویرایش» در ردیف‌های جدولِ امتحان‌ها */
+.btn-edit {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(56, 102, 242, 0.08);
+    color: var(--primary);
+    border: 1px solid rgba(56, 102, 242, 0.28);
+    border-radius: 999px;
+    padding: 6px 14px;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.btn-edit::before {
+    content: '';
+    width: 13px;
+    height: 13px;
+    flex-shrink: 0;
+    background-color: currentColor;
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z'/%3E%3C/svg%3E") center / contain no-repeat;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+.btn-edit:hover {
+    background: rgba(56, 102, 242, 0.14);
+    border-color: rgba(56, 102, 242, 0.5);
+    transform: translateY(-1px);
+    box-shadow: 0 10px 20px -12px rgba(56, 102, 242, 0.55);
+}
+
+.btn-edit:active {
+    transform: translateY(0);
+}
+
+.btn-edit:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+}
+
+/* دکمه‌ی «انصراف از ویرایش» در فرمِ امتحان */
+.btn-cancel-edit {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(239, 68, 68, 0.06);
+    color: var(--danger);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    border-radius: 999px;
+    padding: 11px 20px;
+    font-size: 0.95rem;
+    font-weight: 600;
+}
+
+.btn-cancel-edit::before {
+    content: '';
+    width: 13px;
+    height: 13px;
+    flex-shrink: 0;
+    background-color: currentColor;
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2.6' stroke-linecap='round'%3E%3Cpath d='M18 6 6 18M6 6l12 12'/%3E%3C/svg%3E") center / contain no-repeat;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2.6' stroke-linecap='round'%3E%3Cpath d='M18 6 6 18M6 6l12 12'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+.btn-cancel-edit:hover {
+    background: rgba(239, 68, 68, 0.12);
+    border-color: rgba(239, 68, 68, 0.55);
+    transform: translateY(-1px);
+    box-shadow: 0 12px 22px -14px rgba(239, 68, 68, 0.6);
+}
+
+.btn-cancel-edit:active {
+    transform: translateY(0);
+}
+
+.btn-cancel-edit:focus-visible {
+    outline: 2px solid var(--danger);
+    outline-offset: 2px;
+}
+
+/* دکمه‌ی «حذف» در جدولِ گزارش‌های مطالعه — هم‌خانواده‌ی دکمه‌ی ویرایش */
+.btn-danger-sm {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(239, 68, 68, 0.06);
+    color: var(--danger);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    border-radius: 999px;
+    padding: 6px 14px;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.btn-danger-sm::before {
+    content: '';
+    width: 13px;
+    height: 13px;
+    flex-shrink: 0;
+    background-color: currentColor;
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 6h18M6 6v14a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V6M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M10 11v6M14 11v6'/%3E%3C/svg%3E") center / contain no-repeat;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 6h18M6 6v14a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V6M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M10 11v6M14 11v6'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+.btn-danger-sm:hover {
+    background: rgba(239, 68, 68, 0.12);
+    border-color: rgba(239, 68, 68, 0.55);
+    transform: translateY(-1px);
+    box-shadow: 0 10px 20px -12px rgba(239, 68, 68, 0.55);
+}
+
+.btn-danger-sm:active {
+    transform: translateY(0);
+}
+
+.btn-danger-sm:focus-visible {
+    outline: 2px solid var(--danger);
+    outline-offset: 2px;
+}
+
+/* ترنزیشنِ کامل (شاملِ border-color و color) برای دکمه‌های این بخش —
+   قانونِ پایه‌ی button فقط transform/box-shadow/background را می‌پوشید */
+.btn-edit,
+.btn-cancel-edit,
+.btn-danger-sm {
+    transition: transform var(--transition), box-shadow var(--transition),
+        background-color var(--transition), border-color var(--transition),
+        color var(--transition);
+}
+
+/* --------------------------------------------------------------------
    جدول‌ها (فهرستِ درس‌ها، امتحان‌ها، گزارش‌های مطالعه)
    -------------------------------------------------------------------- */
 
