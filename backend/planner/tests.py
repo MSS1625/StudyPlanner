@@ -570,13 +570,80 @@ class StudyLogAPITests(BaseAPITestCase):
         self.assertEqual(subject_data['progress_percent'], 25.0)
 
     def test_delete_log(self):
-        """حذفِ گزارش: 204.
-        نکته‌ی مستند (TODO.md): ساعتِ کسرشده فعلاً برنمی‌گردد — رفتارِ آگاهانه‌ی
-        فعلی؛ این تست فقط خودِ حذف را پوشش می‌دهد، نه بازیابیِ ساعت را."""
+        """حذفِ گزارش: 204 و حذفِ واقعی (رفتارِ بازگرداندنِ ساعت در تست‌های
+        اختصاصیِ پایین‌تر به‌تفصیل پوشش داده می‌شود)."""
         log = StudyLog.objects.create(user=self.alice, exam=self.exam, hours_studied=1)
         response = self.client_as(self.alice).delete(f'/api/study-logs/{log.pk}/')
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
         self.assertFalse(StudyLog.objects.filter(pk=log.pk).exists())
+
+    def test_delete_log_restores_exam_hours(self):
+        """بازگرداندنِ ساعت (آیتمِ TODO): حذفِ گزارشِ ۳ ساعته، همان ۳ ساعتِ
+        کسرشده را به امتحان برمی‌گرداند و امتحان به حالتِ اولیه برمی‌گردد."""
+        log = StudyLog.objects.create(user=self.alice, exam=self.exam, hours_studied=3)
+        self.exam.refresh_from_db()
+        self.assertEqual(self.exam.study_hours_remaining, 7)  # 10 - 3
+
+        response = self.client_as(self.alice).delete(f'/api/study-logs/{log.pk}/')
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.exam.refresh_from_db()
+        self.assertEqual(self.exam.study_hours_remaining, 10)  # برگشتِ کامل
+
+    def test_delete_clamped_log_restores_exact_deduction(self):
+        """حالتِ کسرِ محدود (Clamp): امتحان ۲ ساعت مانده، گزارشِ ۵ ساعت
+        ثبت شده → فقط ۲ ساعت کسر شده است؛ حذفِ گزارش باید دقیقاً ۲ ساعت
+        برگرداند، نه ۵ (وگرنه ساعتِ امتحان از مقدارِ اولیه‌اش بیشتر می‌شد)."""
+        self.exam.study_hours_remaining = 2
+        self.exam.save()
+        log = StudyLog.objects.create(user=self.alice, exam=self.exam, hours_studied=5)
+
+        self.exam.refresh_from_db()
+        self.assertEqual(self.exam.study_hours_remaining, 0)  # کسرِ محدودشده
+        self.assertEqual(StudyLog.objects.get(pk=log.pk).hours_deducted, 2)
+
+        self.client_as(self.alice).delete(f'/api/study-logs/{log.pk}/')
+        self.exam.refresh_from_db()
+        self.assertEqual(self.exam.study_hours_remaining, 2)  # نه ۵!
+
+    def test_delete_log_when_nothing_was_deducted(self):
+        """امتحانِ کامل‌شده (۰ ساعت مانده): گزارش بدونِ هیچ کسری ثبت می‌شود؛
+        حذفش هم چیزی برنمی‌گرداند (ساعت نباید از هیچ‌جا ظاهر شود)."""
+        self.exam.study_hours_remaining = 0
+        self.exam.save()
+        log = StudyLog.objects.create(user=self.alice, exam=self.exam, hours_studied=4)
+
+        self.exam.refresh_from_db()
+        self.assertEqual(self.exam.study_hours_remaining, 0)
+        self.assertEqual(StudyLog.objects.get(pk=log.pk).hours_deducted, 0)
+
+        self.client_as(self.alice).delete(f'/api/study-logs/{log.pk}/')
+        self.exam.refresh_from_db()
+        self.assertEqual(self.exam.study_hours_remaining, 0)
+
+    def test_delete_one_of_multiple_logs(self):
+        """با چند گزارش رویِ یک امتحان، حذفِ هر گزارش فقط ساعتِ همان را
+        برمی‌گرداند؛ ساعتِ بقیه‌ی گزارش‌ها کسرشده باقی می‌ماند."""
+        log1 = StudyLog.objects.create(user=self.alice, exam=self.exam, hours_studied=2)
+        log2 = StudyLog.objects.create(user=self.alice, exam=self.exam, hours_studied=3)
+        self.exam.refresh_from_db()
+        self.assertEqual(self.exam.study_hours_remaining, 5)  # 10 - 2 - 3
+
+        self.client_as(self.alice).delete(f'/api/study-logs/{log1.pk}/')
+        self.exam.refresh_from_db()
+        self.assertEqual(self.exam.study_hours_remaining, 7)  # 5 + 2
+
+        self.client_as(self.alice).delete(f'/api/study-logs/{log2.pk}/')
+        self.exam.refresh_from_db()
+        self.assertEqual(self.exam.study_hours_remaining, 10)  # 7 + 3
+
+    def test_cascade_exam_delete_is_safe(self):
+        """حذفِ خودِ امتحان (که گزارش‌هایش را آبشاری حذف می‌کند) نباید خطا
+        بدهد: بازگرداندنِ ساعت فقط در حذفِ مستقیمِ گزارش معنا دارد — اینجا
+        امتحانی باقی نمی‌ماند که ساعتی به آن برگردد."""
+        StudyLog.objects.create(user=self.alice, exam=self.exam, hours_studied=2)
+        self.exam.delete()  # حذفِ آبشاری: گزارش‌ها هم باید حذف شوند
+        self.assertFalse(StudyLog.objects.exists())
+        self.assertFalse(Exam.objects.filter(pk=self.exam.pk).exists())
 
 
 # ---------------------------------------------------------------------------
