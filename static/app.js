@@ -152,9 +152,11 @@ const apiDelete = (path, options) =>
 
 // گریختن (Escape) از کاراکترهای خاصِ HTML؛ برای هرجایی که داده‌ی کاربر با
 // innerHTML رندر می‌شود لازم است تا متنِ کاربر نتواند به‌عنوانِ HTML تفسیر
-// شود (جلوگیری از XSS). فعلاً renderExams (نامِ درس و یادداشتِ امتحان)
-// از آن استفاده می‌کند؛ پاکسازیِ کاملِ بقیه‌ی رندرها آیتمِ جداگانه‌ای در
-// TODO.md است.
+// شود (جلوگیری از XSS). قاعده‌ی امنیتی: هر مقدارِ متنی که از API می‌آید —
+// نام و یادداشتِ درس/امتحان/گزارش، پیام‌ها و برچسب‌ها — پیش از درج در
+// innerHTML باید با escapeHtml بسته شود؛ همه‌ی رندرکننده‌ها
+// (Subjects/Exams/StudyLogs/Dashboard/Plan) از آن استفاده می‌کنند.
+// اعدادِ اعتبارسنجی‌شده‌ی سمتِ سرور (ساعت/درصد/تاریخ) بدون escape می‌مانند.
 const escapeHtml = (value) =>
     String(value ?? '')
         .replaceAll('&', '&amp;')
@@ -294,7 +296,7 @@ const renderDashboard = (data) => {
                 const row = document.createElement('div');
                 row.className = 'progress-row';
                 row.innerHTML = `
-                    <h4>${subject.name}</h4>
+                    <h4>${escapeHtml(subject.name)}</h4>
                     <div class="progress-meta">
                         <span>سختی: ${subject.difficulty}/5</span>
                         <span>${subject.completed_hours} از ${subject.total_hours} ساعت</span>
@@ -320,7 +322,7 @@ const renderDashboard = (data) => {
                 const item = document.createElement('div');
                 item.className = 'timeline-item';
                 item.innerHTML = `
-                    <strong>${exam.subject_name}</strong>
+                    <strong>${escapeHtml(exam.subject_name)}</strong>
                     <span>${exam.exam_date} • ${exam.remaining_days} روز باقی‌مانده</span>
                     <span>ساعت باقی‌مانده: ${exam.remaining_hours}</span>
                 `;
@@ -348,8 +350,8 @@ const renderDashboard = (data) => {
                     : 'info';
                 item.className = `alert alert--${alertType}`;
                 item.innerHTML = `
-                    <span>${alert.message}</span>
-                    <strong>${alert.subject ?? ''}</strong>
+                    <span>${escapeHtml(alert.message)}</span>
+                    <strong>${escapeHtml(alert.subject ?? '')}</strong>
                 `;
                 alertsList.appendChild(item);
             });
@@ -372,7 +374,7 @@ const renderDashboard = (data) => {
                 // حداقل ۶٪ ارتفاع می‌گذاریم تا حتی مقادیرِ خیلی کوچک هم دیده شوند
                 bar.style.height = `${Math.max(entry.percent, 6)}%`;
                 bar.title = `${entry.label}: ${entry.hours ?? 0} ساعت در هفته‌ی پیش‌رو`;
-                bar.innerHTML = `<span>${entry.label}</span>`;
+                bar.innerHTML = `<span>${escapeHtml(entry.label)}</span>`;
                 distribution.appendChild(bar);
             });
         }
@@ -427,10 +429,10 @@ const renderSubjects = (subjects) => {
         // یادداشتِ درس (اگر وجود داشته باشد) به‌صورتِ زیرنویسِ کم‌رنگ زیرِ نام
         // درس نمایش داده می‌شود؛ ستونِ جدول اضافه نمی‌شود تا چیدمان حفظ شود.
         const notesMarkup = subject.notes
-            ? `<br><small class="text-muted">${subject.notes}</small>`
+            ? `<br><small class="text-muted">${escapeHtml(subject.notes)}</small>`
             : '';
         row.innerHTML = `
-            <td>${subject.name}${notesMarkup}</td>
+            <td>${escapeHtml(subject.name)}${notesMarkup}</td>
             <td>${subject.difficulty}/5</td>
             <td>${Math.round(subject.progress_percent ?? 0)}%</td>
             <td>${subject.target_score ?? '-'}</td>
@@ -644,10 +646,10 @@ const renderStudyLogs = (logs) => {
     logs.forEach((log) => {
         const row = document.createElement('tr');
         row.innerHTML = `
-            <td>${log.exam_name ?? '-'}</td>
+            <td>${escapeHtml(log.exam_name ?? '-')}</td>
             <td>${log.date}</td>
             <td>${log.hours_studied} ساعت</td>
-            <td>${log.notes ? log.notes : '-'}</td>
+            <td>${log.notes ? escapeHtml(log.notes) : '-'}</td>
             <td><button type="button" class="btn-danger-sm" data-log-id="${log.id}">حذف</button></td>
         `;
         tbody.appendChild(row);
@@ -776,7 +778,7 @@ const renderPlan = (plan) => {
     if (!items.length) {
         // پیامِ خودِ بک‌اند (مثلاً «هیچ امتحان آینده‌ای وجود ندارد») را نشان بده،
         // یا اگر نبود، یک پیامِ عمومی
-        container.innerHTML = `<p class="empty-state">${plan?.message ?? 'داده‌ای برای نمایش وجود ندارد.'}</p>`;
+        container.innerHTML = `<p class="empty-state">${escapeHtml(plan?.message ?? 'داده‌ای برای نمایش وجود ندارد.')}</p>`;
         const total = document.getElementById('totalRecommended');
         if (total) total.textContent = '0 ساعت';
         const daily = document.getElementById('averageDaily');
@@ -797,8 +799,8 @@ const renderPlan = (plan) => {
                 : '';
         block.innerHTML = `
             <div class="plan-header">
-                <h4>${entry.title} ${daysChip}</h4>
-                <span class="plan-hours">${entry.hours_badge ?? `${entry.total_hours ?? 0} ساعت`}</span>
+                <h4>${escapeHtml(entry.title)} ${daysChip}</h4>
+                <span class="plan-hours">${escapeHtml(entry.hours_badge ?? `${entry.total_hours ?? 0} ساعت`)}</span>
             </div>
         `;
         const tasksWrapper = document.createElement('div');
@@ -808,7 +810,7 @@ const renderPlan = (plan) => {
             const taskRow = document.createElement('div');
             taskRow.className = 'plan-task';
             taskRow.innerHTML = `
-                <strong>${task.subject}</strong>
+                <strong>${escapeHtml(task.subject)}</strong>
                 <span>${task.hours} ساعت</span>
             `;
             tasksWrapper.appendChild(taskRow);
