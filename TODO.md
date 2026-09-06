@@ -16,8 +16,8 @@
 
 > آیتمِ «بازگرداندنِ ساعت هنگامِ حذفِ `StudyLog`» در 2026-09-03 انجام شد: فیلدِ `hours_deducted` (Migrationِ `0007`، همراهِ Backfill برای گزارش‌های قدیمی) عددِ دقیقِ کسرشده را نگه می‌دارد و متدِ `delete()` رویِ همان مدل آن را اتمیک به امتحان برمی‌گرداند — شرحِ کامل در `CHANGELOG.md`.
 > آیتمِ «محدودیتِ یکتاییِ `StudyPlan.user` در سطحِ دیتابیس» در 2026-09-05 انجام شد: فیلدِ `user` به `OneToOneField` تبدیل شد (Migrationِ `0008`، همراهِ پاکسازیِ رکوردهایِ تکراریِ احتمالیِ قدیمی) و POST دوباره به `/api/study-plan/` حالا پاسخِ ۴۰۰ خوانا می‌گیرد — شرحِ کامل در `CHANGELOG.md`.
+> آیتمِ «افزودنِ Pagination به Endpointهای فهرستی» در 2026-09-06 انجام شد: کلاسِ `OptionalPageNumberPagination` رویِ سه ViewSet درس/امتحان/گزارش — صفحه‌بندی فقط با `?page=`/`?page_size=` فعال می‌شود (بدونِ آنها همان لیستِ کاملِ قبلی، پس فرانت‌اندِ فعلی دست‌نخورده ماند)؛ سقفِ `page_size` صد رکورد است و ۹ تستِ جدید (مجموع ۷۹) پوششش می‌دهد — شرحِ کامل در `CHANGELOG.md`.
 
-- **افزودنِ Pagination به Endpointهای فهرستی**: هیچ‌کدام از `REST_FRAMEWORK` در `settings.py` یا ViewSetهای مربوطه، تنظیماتِ صفحه‌بندی ندارند؛ `/api/subjects/`, `/api/exams/`, `/api/study-logs/` همیشه کاملِ نتایج را برمی‌گردانند. با افزایشِ تعدادِ رکوردها، این می‌تواند مشکلِ کارایی ایجاد کند. *(منبع: `backend/backend/settings.py`)*
 - **بازبینیِ تنظیماتِ امنیتی پیش از استقرار**: `DEBUG=True`, `SECRET_KEY` هاردکدشده در `settings.py`, و `CORS_ALLOW_ALL_ORIGINS=True` همگی مناسبِ محیطِ توسعه‌اند، نه Production. *(منبع: `README.md` بخشِ ۱۱، `backend/backend/settings.py`)*
 
 ## Low Priority

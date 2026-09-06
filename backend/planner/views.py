@@ -10,7 +10,7 @@
 
 from datetime import date
 
-from rest_framework import viewsets, status, permissions
+from rest_framework import viewsets, status, permissions, pagination
 # api_view: تبدیل یک تابعِ ساده‌ی پایتون به یک View قابل‌فهم برای DRF
 # permission_classes: تعیینِ این‌که چه کسی اجازه‌ی صدا زدنِ این View را دارد
 # action: برای اضافه‌کردنِ یک مسیرِ سفارشی (غیر از CRUD معمولی) به یک ViewSet
@@ -76,6 +76,53 @@ def login(request):
 
 
 # ---------------------------------------------------------------------------
+# صفحه‌بندیِ اختیاریِ لیست‌ها
+# ---------------------------------------------------------------------------
+
+class OptionalPageNumberPagination(pagination.PageNumberPagination):
+    """
+    صفحه‌بندیِ «اختیاری» برای endpointهای لیستی (درس/امتحان/گزارشِ مطالعه).
+
+    قاعده‌ی سازگاری: تا وقتی کلاینت نه ?page= فرستاده و نه ?page_size=،
+    get_page_size مقدارِ None برمی‌گرداند؛ DRF در این حالت صفحه‌بندی را
+    کاملاً غیرفعال می‌کند و پاسخ دقیقاً همان «لیستِ کاملِ JSON» قبل است —
+    یعنی فرانت‌اندِ فعلیِ پروژه (app.js هیچ‌کدام از این پارامترها را
+    نمی‌فرستد) هیچ تغییری حس نمی‌کند.
+
+    به‌محضِ فرستادنِ هرکدام از دو پارامتر، شکلِ پاسخ به قالبِ استانداردِ
+    DRF تبدیل می‌شود:
+        {"count": 27, "next": "...?page=2", "previous": null, "results": [...]}
+    """
+
+    page_query_param = 'page'
+    page_size_query_param = 'page_size'
+    # سقفِ اندازه‌ی صفحه: حتی اگر کلاینت ۱۰۰۰ بفرستد، سرور در یک پاسخ
+    # بیش از ۱۰۰ رکورد نمی‌فرستد (محافظتِ کارایی و پهنای‌باند).
+    max_page_size = 100
+    # اندازه‌ی صفحه وقتی کلاینت فقط ?page= فرستاده (بدونِ page_size)
+    default_page_size = 20
+
+    def get_page_size(self, request):
+        # ۱) page_size صریح: همان مقدار (مثبت و با سقفِ max_page_size).
+        #    مقدارِ نامعتبر/غیرمثبت به‌خودی‌خود صفحه‌بندی را روشن نمی‌کند:
+        #    اگر ?page= هم هست به اندازه‌ی پیش‌فرض می‌افتیم، وگرنه پاسخ
+        #    همان لیستِ کامل می‌ماند (رفتارِ همیشه‌معلوم، نه حالتِ پنهانی).
+        if self.page_size_query_param in request.query_params:
+            try:
+                size = int(request.query_params[self.page_size_query_param])
+                if size <= 0:
+                    raise ValueError
+                return min(size, self.max_page_size)
+            except (TypeError, ValueError):
+                pass
+        # ۲) فقط ?page= : اندازه‌ی پیش‌فرضِ پروژه
+        if self.page_query_param in request.query_params:
+            return self.default_page_size
+        # ۳) هیچ پارامتری نیست → None = صفحه‌بندیِ غیرفعال (لیستِ کامل)
+        return None
+
+
+# ---------------------------------------------------------------------------
 # درس‌ها و امتحان‌ها
 # ---------------------------------------------------------------------------
 
@@ -88,6 +135,11 @@ class SubjectViewSet(viewsets.ModelViewSet):
     serializer_class = SubjectSerializer
     # هیچ‌کس بدونِ لاگین نمی‌تواند این ویوست را صدا بزند
     permission_classes = [IsAuthenticated]
+    # صفحه‌بندیِ اختیاری (فقط با ?page= / ?page_size= فعال می‌شود؛
+    # بدونِ این پارامترها پاسخ همان لیستِ کاملِ قبلی است — سازگار با
+    # فرانت‌اندِ فعلی). مرتب‌سازیِ قطعیِ Meta.ordering مدل (جدیدترین
+    # درس اول) پایداریِ صفحه‌ها را تضمین می‌کند.
+    pagination_class = OptionalPageNumberPagination
 
     def get_queryset(self):
         # prefetch_related جلوی N+1 کوئری را می‌گیرد چون هر Subject برای
@@ -110,6 +162,9 @@ class SubjectViewSet(viewsets.ModelViewSet):
 class ExamViewSet(viewsets.ModelViewSet):
     serializer_class = ExamSerializer
     permission_classes = [IsAuthenticated]
+    # صفحه‌بندیِ اختیاری — همان کلاسِ مشترکِ درس‌ها (Meta.ordering مدل:
+    # امتحانِ نزدیک‌تر اول، پایداریِ صفحه‌ها)
+    pagination_class = OptionalPageNumberPagination
 
     def get_queryset(self):
         # فیلتر بر مبنای subject__user یعنی: فقط امتحان‌هایی که به یک
@@ -142,6 +197,9 @@ class ExamViewSet(viewsets.ModelViewSet):
 class StudyLogViewSet(viewsets.ModelViewSet):
     serializer_class = StudyLogSerializer
     permission_classes = [permissions.IsAuthenticated]
+    # صفحه‌بندیِ اختیاری — همان کلاسِ مشترکِ درس/امتحان (Meta.ordering
+    # مدل: گزارشِ جدیدتر اول)
+    pagination_class = OptionalPageNumberPagination
 
     def get_queryset(self):
         # کاربر فقط گزارش‌های مطالعه خودش را می‌بیند

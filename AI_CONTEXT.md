@@ -46,7 +46,7 @@ django-cors-headers>=4.4
 | `utils.py` | **قلبِ الگوریتمی**: `compute_subject_progress`, `generate_study_plan`, `format_plan_for_frontend`, `build_subject_distribution` |
 | `admin.py` | ثبتِ مدل‌ها در پنلِ `/admin/` |
 | `management/commands/seed_demo_data.py` | دستورِ تولیدِ داده‌ی نمونه برای تست |
-| `tests.py` | ۷۰ تستِ خودکارِ Django/DRF: هشت کلاسِ API (Auth تا الگوریتم) + کلاسِ `StudyPlanUniqueConstraintTests` با `TransactionTestCase` برای قیدِ DB؛ اجرا با `python manage.py test planner` |
+| `tests.py` | ۷۹ تستِ خودکارِ Django/DRF: هشت کلاسِ API (Auth تا الگوریتم) + کلاسِ `PaginationAPITests` (صفحه‌بندیِ اختیاری) + کلاسِ `StudyPlanUniqueConstraintTests` با `TransactionTestCase` برای قیدِ DB؛ اجرا با `python manage.py test planner` |
 | `migrations/0001` تا `0008` | تاریخچه‌ی واقعیِ تکاملِ اسکیمای دیتابیس (تاریخ‌ها در `CHANGELOG.md`) |
 
 ### فرانت‌اند (`static/`)
@@ -91,8 +91,7 @@ User → StudyPlan (1→N در سطحِ مدل، ولی در عمل هر کار�
 
 ۶.۸ **الگوریتمِ `generate_study_plan` سقفِ ۶۰ روز دارد** (`min((last_exam_date - today).days + 1, 60)`) تا برای امتحان‌های خیلی دور، محاسبه‌ی بی‌فایده انجام نشود. نمای «هفتگی» فقط از ۷ روزِ اول استفاده می‌کند، پس این سقف تأثیری در نتیجه‌ی نمایشی ندارد.
 
-۶.۹ **بدون Pagination.** هیچ‌کدام از ViewSetها یا تنظیماتِ `REST_FRAMEWORK` در `settings.py` صفحه‌بندی تعریف نکرده‌اند؛ فهرست‌های API (`/api/subjects/`, `/api/exams/`, `/api/study-logs/`) همیشه کاملِ نتایج را برمی‌گردانند.
-
+۶.۹ **صفحه‌بندیِ لیست‌ها «اختیاری» است و باید همین‌طور بماند.** از 2026-09-06 کلاسِ `OptionalPageNumberPagination` رویِ `SubjectViewSet`/`ExamViewSet`/`StudyLogViewSet` نشسته: تا وقتی کلاینت نه `?page=` فرستاده و نه `?page_size=`، پاسخ همان «لیستِ کاملِ JSON» است — فرانت‌اندِ فعلیِ `app.js` پارامتری نمی‌فرستد و اگر این پیش‌فرضِ «لیستِ کامل» بشکند، همه‌ی صفحاتِ فهرست می‌شکنند. قواعد: سقفِ `page_size` صد رکورد؛ فقط `?page=` یعنی اندازه‌ی ۲۰؛ `page_size` نامعتبر/غیرمثبتِ تنها → صفحه‌بندی غیرفعال؛ صفحه‌ی نامعتبر → ۴۰۴. مرتب‌سازیِ قطعی از `Meta.ordering` خودِ مدل‌ها می‌آید (درس: جدیدترین اول؛ امتحان: نزدیک‌ترین تاریخ اول؛ گزارش: جدیدترین اول).
 ## ۷. Conventions رعایت‌شده در کد
 
 - تمامِ کامنت‌های کد و پیام‌های خطا/UI به **فارسی** نوشته شده‌اند؛ نام‌های متغیر/تابع/کلاس به **انگلیسی**.

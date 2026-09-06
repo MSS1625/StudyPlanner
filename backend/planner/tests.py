@@ -12,6 +12,7 @@
 #   - StudyPlanUniqueConstraintTests ‌یکتاییِ StudyPlan.user در سطحِ DB (مایگریشنِ 0008، با TransactionTestCase)
 #   - DashboardAPITests ....... شکلِ پاسخ، شمارش‌ها و انواعِ هشدار
 #   - StudyPlanAlgorithmTests . تستِ واحدِ توابعِ خالصِ utils.py
+#   - PaginationAPITests ...... صفحه‌بندیِ اختیاریِ endpointهای لیستی (?page/?page_size)
 #
 # اجرا (از پوشه‌ی backend):
 #   python manage.py test planner -v 2
@@ -936,3 +937,142 @@ class StudyPlanAlgorithmTests(BaseAPITestCase):
         self.assertEqual(distribution[0]['label'], 'ریاضی')
         self.assertEqual(distribution[0]['percent'], 100)
         self.assertLess(distribution[1]['percent'], 100)
+
+
+# ---------------------------------------------------------------------------
+# ۸) صفحه‌بندیِ اختیاریِ لیست‌ها
+# ---------------------------------------------------------------------------
+
+class PaginationAPITests(BaseAPITestCase):
+    """
+    صفحه‌بندیِ اختیاریِ endpointهای لیستی (?page= و ?page_size=).
+
+    مهم‌ترین رگرسیون: درخواستِ بدونِ پارامتر باید دقیقاً همان «لیستِ کاملِ
+    JSON» قبل از این قابلیت را بدهد — فرانت‌اندِ فعلیِ پروژه (app.js)
+    هیچ‌کدام از این پارامترها را نمی‌فرستد و نباید چیزی حس کند.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # ۵ درس برای alice؛ ۳ امتحان روی سه درسِ اول؛ ۳ گزارش روی امتحانِ اول
+        self.subjects = [self.create_subject(self.alice, f'درس{i}') for i in range(1, 6)]
+        self.exams = [self.create_exam(subject) for subject in self.subjects[:3]]
+        for _ in range(3):
+            StudyLog.objects.create(user=self.alice, exam=self.exams[0], hours_studied=1)
+        # داده‌ی کاربرِ بیگانه: نباید در هیچ صفحه/شمارشی دیده شود
+        self.create_subject(self.bob, 'درسِ باب')
+        self.create_exam(self.create_subject(self.bob, 'شیمیِ باب'))
+
+    # --- سازگاری با فرانت‌اندِ فعلی ---------------------------------------
+
+    def test_no_params_returns_plain_list(self):
+        """رگرسیون: بدونِ ?page/?page_size پاسخ همان لیستِ کامل است (نه dict)."""
+        expected_counts = {
+            '/api/subjects/': 5,
+            '/api/exams/': 3,
+            '/api/study-logs/': 3,
+        }
+        for url, expected in expected_counts.items():
+            with self.subTest(url=url):
+                body = self.client_as(self.alice).get(url).json()
+                self.assertIsInstance(body, list)
+                self.assertEqual(len(body), expected)
+
+    def test_invalid_page_size_alone_returns_plain_list(self):
+        """page_size نامعتبر/غیرمثبت بدونِ page → صفحه‌بندی فعال نمی‌شود."""
+        for query in ('?page_size=abc', '?page_size=0', '?page_size=-3'):
+            with self.subTest(query=query):
+                body = self.client_as(self.alice).get(f'/api/subjects/{query}').json()
+                self.assertIsInstance(body, list)
+                self.assertEqual(len(body), 5)
+
+    # --- شکلِ پاسخِ صفحه‌بندی‌شده -------------------------------------------
+
+    def test_page_size_returns_paginated_shape(self):
+        """?page_size=2 → قالبِ استانداردِ {count,next,previous,results} + جداسازی."""
+        body = self.client_as(self.alice).get('/api/subjects/?page_size=2').json()
+
+        self.assertIsInstance(body, dict)
+        self.assertEqual(set(body.keys()), {'count', 'next', 'previous', 'results'})
+        # count فقط درس‌هایِ alice را می‌شمارد (درسِ باب نه)
+        self.assertEqual(body['count'], 5)
+        self.assertEqual(len(body['results']), 2)
+        self.assertIsNone(body['previous'])
+        self.assertIsNotNone(body['next'])
+        self.assertIn('page=2', body['next'])
+        self.assertNotIn('درسِ باب', [s['name'] for s in body['results']])
+
+    def test_page_only_uses_default_page_size(self):
+        """?page= به‌تنهایی → صفحه‌بندی فعال با اندازه‌ی پیش‌فرض (۲۰ ≥ ۵ → همه)."""
+        body = self.client_as(self.alice).get('/api/subjects/?page=1').json()
+
+        self.assertIsInstance(body, dict)
+        self.assertEqual(body['count'], 5)
+        self.assertEqual(len(body['results']), 5)
+        self.assertIsNone(body['next'])
+        self.assertIsNone(body['previous'])
+
+    def test_exams_and_study_logs_paginate_the_same_way(self):
+        """امتحان‌ها و گزارش‌ها هم با همان کلاسِ مشترک صفحه‌بندی می‌شوند."""
+        for url, total in (('/api/exams/', 3), ('/api/study-logs/', 3)):
+            with self.subTest(url=url):
+                body = self.client_as(self.alice).get(f'{url}?page_size=2').json()
+
+                self.assertEqual(body['count'], total)
+                self.assertEqual(len(body['results']), 2)
+                self.assertIn('page=2', body['next'])
+
+    # --- صحتِ پیمایشِ صفحه‌ها -----------------------------------------------
+
+    def test_all_pages_cover_every_record_exactly_once(self):
+        """صفحه‌هایِ ۱..۳ با page_size=2 → اجتماعِ نتایج = هر ۵ درس، بدونِ هم‌پوشانی."""
+        seen_ids = []
+        for page_number in (1, 2, 3):
+            body = self.client_as(self.alice).get(
+                f'/api/subjects/?page={page_number}&page_size=2'
+            ).json()
+            seen_ids.extend(subject['id'] for subject in body['results'])
+
+        # اگر رکوردی دو بار می‌آمد یا جایی می‌ماند، این مقایسه می‌شکست
+        self.assertEqual(sorted(seen_ids), sorted(s.id for s in self.subjects))
+
+    def test_last_page_has_null_next_link(self):
+        """آخرین صفحه: next=null و previous مقدار دارد."""
+        body = self.client_as(self.alice).get('/api/subjects/?page=3&page_size=2').json()
+
+        self.assertEqual(len(body['results']), 1)
+        self.assertIsNone(body['next'])
+        self.assertIsNotNone(body['previous'])
+
+    def test_out_of_range_or_invalid_page_returns_404(self):
+        """صفحه‌ی نامعتبر/خارج از محدوده → 404 استانداردِ DRF (نه 500)."""
+        for query in ('?page=abc', '?page=99', '?page=abc&page_size=2'):
+            with self.subTest(query=query):
+                response = self.client_as(self.alice).get(f'/api/subjects/{query}')
+                self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    # --- تستِ واحدِ خودِ کلاسِ صفحه‌بندی --------------------------------------
+
+    def test_pagination_class_size_rules(self):
+        """قواعدِ get_page_size: پیش‌فرض، سقفِ ۱۰۰، غیرفعال‌بودنِ بدونِ پارامتر."""
+        from rest_framework.request import Request
+        from rest_framework.test import APIRequestFactory
+
+        from .views import OptionalPageNumberPagination
+
+        factory = APIRequestFactory()
+
+        def size_for(params):
+            # factory درخواستِ خامِ Django می‌سازد؛ query_params (که DRF
+            # می‌فهمد) فقط رویِ Requestِ DRF وجود دارد، پس می‌پیچیمش.
+            request = Request(factory.get('/api/subjects/', params))
+            return OptionalPageNumberPagination().get_page_size(request)
+
+        self.assertIsNone(size_for({}))                       # هیچ پارامتری
+        self.assertEqual(size_for({'page': '2'}), 20)          # فقط page → پیش‌فرض
+        self.assertEqual(size_for({'page_size': '5'}), 5)      # صریح
+        self.assertEqual(size_for({'page_size': '999'}), 100)  # سقفِ max_page_size
+        self.assertIsNone(size_for({'page_size': 'abc'}))      # نامعتبر
+        self.assertIsNone(size_for({'page_size': '0'}))        # غیرمثبت
+        # نامعتبر همراه با page → به اندازه‌ی پیش‌فرض می‌افتد
+        self.assertEqual(size_for({'page': '2', 'page_size': 'abc'}), 20)
