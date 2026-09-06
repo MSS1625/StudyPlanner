@@ -97,8 +97,9 @@ class ExamSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Exam
+        # notes از این پس یک فیلدِ واقعیِ مدل است (رفعِ فیلدِ یتیمِ فرمِ امتحان).
         fields = ['id', 'subject', 'subject_name', 'exam_date', 'chapters_remaining',
-                  'study_hours_remaining', 'created_at', 'updated_at']
+                  'study_hours_remaining', 'notes', 'created_at', 'updated_at']
         # این دو فیلد را کاربر نمی‌تواند مستقیم تغییر بدهد؛ جنگو خودش پرشان می‌کند.
         read_only_fields = ['created_at', 'updated_at']
 
