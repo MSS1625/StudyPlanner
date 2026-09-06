@@ -17,10 +17,12 @@ from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, ValidationError, ValidationError
 # RefreshToken: برای ساختنِ توکن‌های JWT (دسترسی + تمدید) هنگام ثبت‌نام/ورود
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import authenticate
+from django.db import IntegrityError
+from django.db import IntegrityError
 
 from .models import Subject, Exam, StudyPlan, StudyLog
 from .serializers import UserSerializer, SubjectSerializer, ExamSerializer, StudyPlanSerializer, StudyLogSerializer
@@ -185,7 +187,26 @@ class StudyPlanViewSet(viewsets.ModelViewSet):
         return StudyPlan.objects.filter(user=self.request.user).order_by('-created_at')
 
     def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
+        # رگرسیونِ یکتایی (مایگریشنِ 0008): فیلدِ user از این پس در
+        # سطحِ دیتابیس یکتاست؛ یک POST مستقیم به /api/study-plan/ برای
+        # بارِ دوم دیگر نباید رکوردِ تکراری بسازد. این چکِ پیشینی +
+        # گرفتنِ IntegrityError، خطایِ 500 خام را به پاسخِ 400 خوانا
+        # تبدیل می‌کند (همان الگویِ نامِ درسِ تکراری در SubjectViewSet).
+        if StudyPlan.objects.filter(user=self.request.user).exists():
+            raise ValidationError({
+                'detail': 'تنظیماتِ برنامه‌یِ مطالعه برای این کاربر از قبل موجود است؛ '
+                          'برای تغییر، از generate یا PATCH استفاده کنید.'
+            })
+        try:
+            serializer.save(user=self.request.user)
+        except IntegrityError:
+            # حالتِ نادرِ Race: رکورد در فاصله‌یِ بینِ چکِ بالا و INSERT
+            # ساخته شد؛ قیدِ DB آن را بلاک کرد و اینجا به 400 خوانا
+            # تبدیل می‌شود.
+            raise ValidationError({
+                'detail': 'تنظیماتِ برنامه‌یِ مطالعه برای این کاربر از قبل موجود است؛ '
+                          'برای تغییر، از generate یا PATCH استفاده کنید.'
+            })
 
     def list(self, request, *args, **kwargs):
         """

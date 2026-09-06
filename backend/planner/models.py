@@ -135,8 +135,20 @@ class StudyPlan(models.Model):
 
     نکته: در views.py با الگوی get_or_create از این مدل استفاده می‌شود، یعنی
     عملاً هر کاربر یک رکورد (تنظیمات) دارد، نه چند رکورد جداگانه.
+    (از مایگریشنِ 0008 این یکتایی در سطحِ خودِ دیتابیس هم با قیدِ
+    UNIQUE روی ستونِ user_id تضمین می‌شود؛ پیش از اعمالِ قید، رکورد‌های
+    تکراریِ احتمالی در خودِ مایگریشن پاکسازی می‌شوند.)
     """
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='study_plans')
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name='study_plans',
+        # OneToOneField = ForeignKey با قیدِ یکتاییِ داخلی: هر کاربر
+        # حداکثر یک رکوردِ «تنظیماتِ برنامه» دارد. این قید از مایگریشنِ
+        # 0008 در خودِ دیتابیس اعمال می‌شود و الگوی get_or_create در
+        # views.py را در برابرِ درخواست‌هایِ هم‌زمان (Race
+        # Condition) مصون می‌کند.
+    )
 
     # چند ساعت در روز، کاربر برای مطالعه وقت آزاد دارد؛ این عدد مستقیماً در
     # فرمول تخصیصِ روزانه‌ی الگوریتم (generate_study_plan) ضرب می‌شود.

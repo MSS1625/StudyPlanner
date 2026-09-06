@@ -9,6 +9,7 @@
 #   - ExamAPITests ............ CRUD امتحان + ویرایش (PATCH) + سناریوهای امنیتی
 #   - StudyLogAPITests ........ ثبتِ گزارش + کسرِ ساعتِ امتحان + جداسازی
 #   - StudyPlanAPITests ....... endpoint برنامه‌ی مطالعه + اعتبارسنجیِ ورودی
+#   - StudyPlanUniqueConstraintTests ‌یکتاییِ StudyPlan.user در سطحِ DB (مایگریشنِ 0008، با TransactionTestCase)
 #   - DashboardAPITests ....... شکلِ پاسخ، شمارش‌ها و انواعِ هشدار
 #   - StudyPlanAlgorithmTests . تستِ واحدِ توابعِ خالصِ utils.py
 #
@@ -27,6 +28,8 @@
 from datetime import date, timedelta
 
 from django.contrib.auth.models import User
+from django.db import IntegrityError
+from django.test import TransactionTestCase
 from rest_framework import status
 from rest_framework.test import APIClient, APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -726,6 +729,51 @@ class StudyPlanAPITests(BaseAPITestCase):
 
         self.assertEqual(StudyPlan.objects.filter(user=self.alice).count(), 1)
         self.assertEqual(StudyPlan.objects.get(user=self.alice).daily_available_hours, 4)
+
+
+    def test_direct_post_second_settings_rejected(self):
+        """رگرسیون (0008): POST مستقیم به /api/study-plan/ فقط یک‌بار می‌سازد؛
+        بارِ دوم پاسخِ 400 خوانا می‌گیرد (نه خطایِ 500 خامِ دیتابیس) و رکوردِ دومی ساخته نمی‌شود."""
+        client = self.client_as(self.alice)
+        first = client.post('/api/study-plan/', {'daily_available_hours': 5.0}, format='json')
+        self.assertEqual(first.status_code, status.HTTP_201_CREATED)
+        second = client.post('/api/study-plan/', {'daily_available_hours': 6.0}, format='json')
+        self.assertEqual(second.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('detail', second.json())
+        self.assertEqual(StudyPlan.objects.filter(user=self.alice).count(), 1)
+
+
+# ---------------------------------------------------------------------------
+# ۵-ب) قیدِ یکتاییِ StudyPlan.user در سطحِ دیتابیس
+# ---------------------------------------------------------------------------
+
+class StudyPlanUniqueConstraintTests(TransactionTestCase):
+    """یکتاییِ StudyPlan.user در خودِ دیتابیس (مایگریشنِ 0008).
+    TransactionTestCase لازم است چون IntegrityError تراکنشِ TestCase را
+    می‌شکند و بعد از آن هیچ کوئریِ دیگری در همان تست ممکن نیست."""
+
+    def test_db_rejects_second_row_for_same_user(self):
+        """دو CREATE خامِ ORM برای یک کاربر → IntegrityError؛ قیدِ UNIQUE واقعاً در DB نشسته است."""
+        user = User.objects.create_user('plandupe', password='Strong-Pass-123')
+        StudyPlan.objects.create(user=user, daily_available_hours=2.0)
+        with self.assertRaises(IntegrityError):
+            StudyPlan.objects.create(user=user, daily_available_hours=3.0)
+        self.assertEqual(StudyPlan.objects.filter(user=user).count(), 1)
+
+    def test_get_or_create_remains_idempotent_under_constraint(self):
+        """الگوی get_or_create (مسیرِ اصلیِ views.py) با وجودِ قید، رفتارِ پیشین را دارد."""
+        user = User.objects.create_user('planatomic', password='Strong-Pass-123')
+        obj, created = StudyPlan.objects.get_or_create(
+            user=user, defaults={'daily_available_hours': 2.0}
+        )
+        self.assertTrue(created)
+        obj2, created2 = StudyPlan.objects.get_or_create(
+            user=user, defaults={'daily_available_hours': 4.0}
+        )
+        self.assertFalse(created2)
+        self.assertEqual(obj.pk, obj2.pk)
+        # مقدارِ موجود (2.0) دست‌نخورده می‌ماند؛ defaults فقط موقعِ ساخت اعمال می‌شود
+        self.assertEqual(obj2.daily_available_hours, 2.0)
 
 
 # ---------------------------------------------------------------------------

@@ -46,8 +46,8 @@ django-cors-headers>=4.4
 | `utils.py` | **قلبِ الگوریتمی**: `compute_subject_progress`, `generate_study_plan`, `format_plan_for_frontend`, `build_subject_distribution` |
 | `admin.py` | ثبتِ مدل‌ها در پنلِ `/admin/` |
 | `management/commands/seed_demo_data.py` | دستورِ تولیدِ داده‌ی نمونه برای تست |
-| `tests.py` | ۶۷ تستِ خودکارِ Django/DRF (از 2026-08-29): هفت کلاس از Auth تا الگوریتم؛ اجرا با `python manage.py test planner` |
-| `migrations/0001` تا `0007` | تاریخچه‌ی واقعیِ تکاملِ اسکیمای دیتابیس (تاریخ‌ها در `CHANGELOG.md`) |
+| `tests.py` | ۷۰ تستِ خودکارِ Django/DRF: هشت کلاسِ API (Auth تا الگوریتم) + کلاسِ `StudyPlanUniqueConstraintTests` با `TransactionTestCase` برای قیدِ DB؛ اجرا با `python manage.py test planner` |
+| `migrations/0001` تا `0008` | تاریخچه‌ی واقعیِ تکاملِ اسکیمای دیتابیس (تاریخ‌ها در `CHANGELOG.md`) |
 
 ### فرانت‌اند (`static/`)
 
@@ -81,7 +81,7 @@ User → StudyPlan (1→N در سطحِ مدل، ولی در عمل هر کار�
 
 ۶.۳ **`get_queryset` در هر ViewSet باید همیشه بر اساسِ `self.request.user` فیلتر شود.** حذفِ این فیلتر یعنی یک کاربر می‌تواند داده‌ی کاربرِ دیگر را ببیند (آسیب‌پذیریِ IDOR). این الگو در `SubjectViewSet`, `ExamViewSet`, `StudyLogViewSet`, `StudyPlanViewSet` رعایت شده و باید در هر ViewSetِ جدید هم رعایت شود.
 
-۶.۴ **`StudyPlan.user` هیچ محدودیتِ `unique` در سطحِ دیتابیس ندارد.** فرض بر این است که هر کاربر فقط یک رکورد دارد (با الگوی `get_or_create` در `views.py`)، ولی این تضمین در سطحِ دیتابیس اجرا نمی‌شود؛ تحتِ شرایطِ همزمانی (Race Condition) نظری می‌تواند بیش از یک رکورد ساخته شود.
+۶.۴ **`StudyPlan.user` از مایگریشنِ 0008 (2026-09-05) `OneToOneField` است و در خودِ دیتابیس یکتاست.** «هر کاربر حداکثر یک رکوردِ تنظیماتِ برنامه» حالا قیدِ UNIQUE دارد؛ Migrationِ 0008 پیش از اعمالِ قید رکوردهایِ تکراریِ قدیمی را پاکسازی می‌کند (جدیدترینِ هر کاربر نگه داشته می‌شود) و الگوی `get_or_create` در `views.py` در برابرِ درخواست‌هایِ هم‌زمان (Race Condition) مصون است. POST دوباره به `/api/study-plan/` پاسخِ ۴۰۰ خوانا می‌گیرد.
 
 ۶.۵ **نام‌گذاریِ `target_score` در برابرِ `target_grade`.** فرانت‌اند و API از نامِ `target_score` استفاده می‌کنند؛ مدل و دیتابیس از `target_grade`. این نگاشت در `SubjectSerializer` با `source='target_grade'` انجام می‌شود. اگر این فیلد را جایی دستی دست بزنی، نامِ درست را گم نکن.
 

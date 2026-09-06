@@ -15,8 +15,8 @@
 ## Medium Priority
 
 > آیتمِ «بازگرداندنِ ساعت هنگامِ حذفِ `StudyLog`» در 2026-09-03 انجام شد: فیلدِ `hours_deducted` (Migrationِ `0007`، همراهِ Backfill برای گزارش‌های قدیمی) عددِ دقیقِ کسرشده را نگه می‌دارد و متدِ `delete()` رویِ همان مدل آن را اتمیک به امتحان برمی‌گرداند — شرحِ کامل در `CHANGELOG.md`.
+> آیتمِ «محدودیتِ یکتاییِ `StudyPlan.user` در سطحِ دیتابیس» در 2026-09-05 انجام شد: فیلدِ `user` به `OneToOneField` تبدیل شد (Migrationِ `0008`، همراهِ پاکسازیِ رکوردهایِ تکراریِ احتمالیِ قدیمی) و POST دوباره به `/api/study-plan/` حالا پاسخِ ۴۰۰ خوانا می‌گیرد — شرحِ کامل در `CHANGELOG.md`.
 
-- **محدودیتِ یکتاییِ `StudyPlan.user` در سطحِ دیتابیس**: فیلدِ `user` روی مدلِ `StudyPlan` یک `ForeignKey` معمولی است (نه `unique=True` یا `OneToOneField`)، در حالی که کدِ `views.py` با الگویِ `get_or_create` فرض می‌کند هر کاربر فقط یک رکورد دارد. تحتِ Race Condition (دو درخواستِ هم‌زمان از یک کاربر) نظراً می‌شود بیش از یک رکورد ساخته شود. راه‌حل: افزودنِ `unique=True` (یا تبدیل به `OneToOneField`) + یک Migrationِ جدید. *(منبع: `backend/planner/models.py`)*
 - **افزودنِ Pagination به Endpointهای فهرستی**: هیچ‌کدام از `REST_FRAMEWORK` در `settings.py` یا ViewSetهای مربوطه، تنظیماتِ صفحه‌بندی ندارند؛ `/api/subjects/`, `/api/exams/`, `/api/study-logs/` همیشه کاملِ نتایج را برمی‌گردانند. با افزایشِ تعدادِ رکوردها، این می‌تواند مشکلِ کارایی ایجاد کند. *(منبع: `backend/backend/settings.py`)*
 - **بازبینیِ تنظیماتِ امنیتی پیش از استقرار**: `DEBUG=True`, `SECRET_KEY` هاردکدشده در `settings.py`, و `CORS_ALLOW_ALL_ORIGINS=True` همگی مناسبِ محیطِ توسعه‌اند، نه Production. *(منبع: `README.md` بخشِ ۱۱، `backend/backend/settings.py`)*
 
