@@ -70,6 +70,30 @@ class SubjectSerializer(serializers.ModelSerializer):
         # گرفته می‌شد — رفعِ فیلد یتیم).
         fields = ['id', 'name', 'difficulty', 'target_score', 'notes']
 
+    def validate_name(self, value):
+        """
+        یکتاییِ نامِ درس به ازای هر کاربر، در سطحِ API (کد 400 تمیز، نه خطای 500).
+
+        چرا این اعتبارسنجی لازم است؟ محدودیتِ یکتاییِ ('user', 'name') فقط در
+        سطحِ دیتابیس وجود دارد (Meta.unique_together). DRF فقط وقتی می‌تواند
+        به‌صورت خودکار UniqueTogetherValidator بسازد که «هر دو» فیلدِ آن
+        محدودیت در سریالایزر حضور داشته باشند؛ ولی فیلد user عمداً اینجا
+        نیست (کاربر از روی توکنِ درخواست تعیین می‌شود، نه ورودیِ فرم).
+        نتیجه‌ی نبودِ این متد: IntegrityErrorِ خامِ دیتابیس که به‌صورت
+        خطای 500 به کلاینت می‌رسید (کشف‌شده هنگام نوشتنِ تست‌ها، 2026-08-29).
+        """
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        # فقط وقتی کاربرِ احراز‌هویت‌شده در دسترس است این بررسی معنا دارد
+        if user is not None and user.is_authenticated:
+            qs = Subject.objects.filter(user=user, name=value)
+            # در حالتِ ویرایش (update)، خودِ رکوردِ فعلی نباید با خودش مقایسه شود
+            if self.instance is not None:
+                qs = qs.exclude(pk=self.instance.pk)
+            if qs.exists():
+                raise serializers.ValidationError('شما قبلاً درسی با این نام ثبت کرده‌اید.')
+        return value
+
     def to_representation(self, instance):
         """
         فیلدهای محاسباتی (پیشرفت، ساعات مطالعه‌شده/باقی‌مانده) را یک‌جا و با
