@@ -9,6 +9,9 @@ from django.urls import path, include
 # DefaultRouter: به‌جای نوشتنِ دستیِ ۵ مسیر برای هر ViewSet (list/create/
 # retrieve/update/delete)، با یک خط register این مسیرها را خودکار می‌سازد.
 from rest_framework.routers import DefaultRouter
+# TokenRefreshView: ویوی آماده‌ی SimpleJWT برای «تمدیدِ توکنِ دسترسی» —
+# بدنه‌ی {"refresh": "..."} می‌گیرد و توکنِ دسترسیِ تازه برمی‌گرداند.
+from rest_framework_simplejwt.views import TokenRefreshView
 from . import views
 
 router = DefaultRouter()
@@ -33,5 +36,11 @@ urlpatterns = [
     # این سه مسیر، توابعِ ساده (نه ViewSet) هستند، پس دستی تعریف می‌شوند.
     path('auth/register/', views.register, name='register'),
     path('auth/login/', views.login, name='login'),
+    # تمدیدِ توکنِ دسترسی: فرانت‌اند وقتی پاسخِ 401 می‌گیرد، توکنِ Refreshِ ذخیره‌شده را
+    # به این مسیر می‌فرستد و توکنِ دسترسیِ تازه می‌گیرد (و اگر خودِ توکنِ Refresh هم
+    # منقضی/بی‌اعتبار باشد، همین مسیر 401 می‌دهد و فرانت‌اند کاربر را به صفحه‌ی ورود
+    # هدایت می‌کند). این ویو مثلِ register/login بدونِ هدرِ Authorization در دسترس است
+    # (خودِ توکنِ Refresh اثباتِ هویت است، نه هدر).
+    path('auth/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('dashboard/', views.dashboard, name='dashboard'),
 ]

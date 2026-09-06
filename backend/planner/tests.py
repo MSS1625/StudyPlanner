@@ -140,6 +140,48 @@ class AuthAPITests(BaseAPITestCase):
         self.assertIn('access', body)
         self.assertIn('refresh', body)
 
+    def test_refresh_returns_new_working_access_token(self):
+        """رگرسیونِ انقضای توکن (2026-09-06): توکنِ Refreshِ معتبر → توکنِ دسترسیِ تازه که واقعاً کار می‌کند."""
+        login_body = self.client.post(
+            '/api/auth/login/',
+            {'username': 'alice', 'password': 'pw-12345678'},
+            format='json',
+        ).json()
+
+        response = self.client.post(
+            '/api/auth/refresh/',
+            {'refresh': login_body['refresh']},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        new_access = response.json()['access']
+        self.assertTrue(new_access)  # توکنِ خالی نیست
+        # توکنِ تازه باید رویِ endpointهای محافظت‌شده واقعاً کار کند (ادغامِ کاملِ مسیر)
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f'Bearer {new_access}')
+        self.assertEqual(client.get('/api/subjects/').status_code, status.HTTP_200_OK)
+
+    def test_refresh_with_garbage_token_rejected(self):
+        """توکنِ Refreshِ بی‌اعتبار: 401 (این همان سیگنالی است که فرانت‌اند را به صفحه‌ی ورود می‌فرستد)."""
+        response = self.client.post(
+            '/api/auth/refresh/',
+            {'refresh': 'garbage-token-not-a-jwt'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertNotIn('access', response.json())
+
+    def test_refresh_endpoint_needs_no_auth_header(self):
+        """مسیرِ تمدید مثلِ ورود/ثبت‌نام عمومی است؛ نبودِ هدرِ Authorization نباید 403 بدهد."""
+        # APIClientِ خالی = هیچ هدری فرستاده نمی‌شود؛ پاسخِ درست اینجا 401/400 است نه 403
+        response = APIClient().post(
+            '/api/auth/refresh/', {'refresh': 'x'}, format='json'
+        )
+
+        self.assertNotEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
     def test_login_wrong_password_rejected(self):
         """رمزِ غلط: 401 بدون هیچ توکنی."""
         response = self.client.post(

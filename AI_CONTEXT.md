@@ -46,7 +46,7 @@ django-cors-headers>=4.4
 | `utils.py` | **قلبِ الگوریتمی**: `compute_subject_progress`, `generate_study_plan`, `format_plan_for_frontend`, `build_subject_distribution` |
 | `admin.py` | ثبتِ مدل‌ها در پنلِ `/admin/` |
 | `management/commands/seed_demo_data.py` | دستورِ تولیدِ داده‌ی نمونه برای تست |
-| `tests.py` | ۷۹ تستِ خودکارِ Django/DRF: هشت کلاسِ API (Auth تا الگوریتم) + کلاسِ `PaginationAPITests` (صفحه‌بندیِ اختیاری) + کلاسِ `StudyPlanUniqueConstraintTests` با `TransactionTestCase` برای قیدِ DB؛ اجرا با `python manage.py test planner` |
+| `tests.py` | ۸۲ تستِ خودکارِ Django/DRF: هشت کلاسِ API (Auth تا الگوریتم؛ Auth شامل تست‌های تمدیدِ توکن) + کلاسِ `PaginationAPITests` (صفحه‌بندیِ اختیاری) + کلاسِ `StudyPlanUniqueConstraintTests` با `TransactionTestCase` برای قیدِ DB؛ اجرا با `python manage.py test planner` |
 | `migrations/0001` تا `0008` | تاریخچه‌ی واقعیِ تکاملِ اسکیمای دیتابیس (تاریخ‌ها در `CHANGELOG.md`) |
 
 ### فرانت‌اند (`static/`)
@@ -102,7 +102,7 @@ User → StudyPlan (1→N در سطحِ مدل، ولی در عمل هر کار�
 
 ## ۸. احراز هویت (خلاصه)
 
-JWT با `djangorestframework-simplejwt`. توکنِ دسترسی: ۱ روز. توکنِ تمدید: ۷ روز. `ROTATE_REFRESH_TOKENS=False`. توکن در `localStorage` مرورگر نگهداری می‌شود (کلیدها در `app.js`, آبجکتِ `storageKeys`). جزئیاتِ کامل: README بخشِ ۴.۲ و ۴.۴.
+JWT با `djangorestframework-simplejwt`. توکنِ دسترسی: ۱ روز. توکنِ تمدید: ۷ روز. `ROTATE_REFRESH_TOKENS=False`. هر دو توکن در `localStorage` مرورگر ذخیره می‌شوند (کلیدهای `ssp_token` و `ssp_refresh_token` در آبجکتِ `storageKeys`). از 2026-09-06 مسیرِ `POST /api/auth/refresh/` (ویویِ آماده‌ی `TokenRefreshView`) فعال است و `apiRequest` در پاسخِ 401 اول یک‌بار بی‌صدا تمدید و درخواست را دوباره می‌زند؛ اگر تمدید ممکن نبود، `forceLogoutExpired` کاربر را به `login.html?expired=1` هدایت می‌کند (جزئیات در `app.js` و `docs/04`).
 
 ## ۹. Configuration مهم (`backend/backend/settings.py`)
 

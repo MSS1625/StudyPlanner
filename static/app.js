@@ -21,6 +21,7 @@ const API_BASE = 'http://127.0.0.1:8000';
 // شود، فقط همین‌جا را باید ویرایش کرد، نه همه‌جای کد را.
 const endpoints = {
     login: '/api/auth/login/',
+    tokenRefresh: '/api/auth/refresh/',
     register: '/api/auth/register/',
     dashboard: '/api/dashboard/',
     subjects: '/api/subjects/',
@@ -47,6 +48,7 @@ const selectors = {
 // کلیدهایی که با آن‌ها اطلاعاتِ نشست (Session) در localStorage مرورگر ذخیره می‌شود
 const storageKeys = {
     token: 'ssp_token',
+    refreshToken: 'ssp_refresh_token',
     username: 'ssp_username',
 };
 
@@ -55,6 +57,13 @@ const storageKeys = {
 const getToken = () => localStorage.getItem(storageKeys.token);
 const setToken = (token) => localStorage.setItem(storageKeys.token, token);
 const clearToken = () => localStorage.removeItem(storageKeys.token);
+// توکنِ «تمدید» (Refresh): از 2026-09-06 کنارِ توکنِ دسترسی ذخیره می‌شود تا
+// بعد از انقضایِ توکنِ دسترسی (۱ روز)، تمدیدِ بی‌صدا ممکن باشد.
+const getRefreshToken = () => localStorage.getItem(storageKeys.refreshToken);
+const setRefreshToken = (token) =>
+    localStorage.setItem(storageKeys.refreshToken, token);
+const clearRefreshToken = () =>
+    localStorage.removeItem(storageKeys.refreshToken);
 const setStoredUsername = (username) =>
     localStorage.setItem(storageKeys.username, username);
 const getStoredUsername = () => localStorage.getItem(storageKeys.username);
@@ -70,7 +79,7 @@ const clearStoredUsername = () => localStorage.removeItem(storageKeys.username);
 // تبدیلِ بدنه به JSON، و مدیریتِ خطا فقط یک‌بار (نه در هر تابع جداگانه) نوشته می‌شود.
 const apiRequest = async (
     path,
-    { method = 'GET', body, headers = {}, skipAuth = false } = {},
+    { method = 'GET', body, headers = {}, skipAuth = false, _isRetry = false } = {},
 ) => {
     const token = getToken();
 
@@ -108,6 +117,24 @@ const apiRequest = async (
     const data = await response.json().catch(() => ({}));
 
     if (!response.ok) {
+        // ۴۰۱ یعنی توکنِ دسترسیِ منقضی/بی‌اعتبار. استراتژی (از 2026-09-06): یک‌بار
+        // بی‌صدا با توکنِ Refresh تمدید می‌کنیم و «همان درخواست» را دوباره می‌زنیم؛
+        // اگر تمدید ممکن نشد (Refresh هم منقضی/ذخیره‌نشده) یا تکرارِ درخواست هم
+        // ۴۰۱ داد، نشست واقعاً تمام است: توکن‌ها پاک و کاربر به صفحه‌ی ورود
+        // هدایت می‌شود (با پیامِ «منقضی شد»).
+        if (response.status === 401 && !skipAuth) {
+            if (!_isRetry && getRefreshToken()) {
+                const newToken = await refreshAccessToken();
+                if (newToken) {
+                    return apiRequest(path, {
+                        method, body, headers, skipAuth, _isRetry: true,
+                    });
+                }
+            }
+            forceLogoutExpired();
+            throw new Error('نشست شما منقضی شده است؛ لطفاً دوباره وارد شوید.');
+        }
+
         // اگر پاسخ کدِ خطا داشت (400/401/403/...)، سعی می‌کنیم مناسب‌ترین پیامِ
         // خطا را از بین شکل‌های مختلفی که DRF ممکن است برگرداند پیدا کنیم:
         let message = 'خطایی رخ داده است.';
@@ -145,6 +172,59 @@ const apiPatch = (path, body, options) =>
     apiRequest(path, { ...options, method: 'PATCH', body });
 const apiDelete = (path, options) =>
     apiRequest(path, { ...options, method: 'DELETE' });
+
+// ---------------------------------------------------------------------
+// تمدیدِ خودکارِ نشست (از 2026-09-06)
+// ---------------------------------------------------------------------
+
+// وقتی «کلِ نشست» از دست رفته باشد (توکنِ Refresh هم منقضی/بی‌اعتبار)،
+// همه‌ی داده‌های نشست پاک و کاربر به صفحه‌ی ورود هدایت می‌شود؛ پارامترِ
+// expired=1 باعث می‌شود صفحه‌ی ورود یک Toast توضیحی نشان بدهد، نه این‌که
+// کاربر بی‌خبر وسطِ کار رها شود. اگر همین الان روی صفحه‌ی ورود هستیم،
+// هدایتی انجام نمی‌شود (جلویِ هر نوعِ حلقه‌ی هدایت را می‌گیرد).
+const forceLogoutExpired = () => {
+    clearToken();
+    clearRefreshToken();
+    clearStoredUsername();
+    if (document.body.dataset.page !== 'login') {
+        window.location.href = 'login.html?expired=1';
+    }
+};
+
+// تمدیدِ توکنِ دسترسی با توکنِ Refreshِ ذخیره‌شده. چند درخواستِ هم‌زمانِ ۴۰۱‌شده
+// نباید چند بار تمدید بزنند؛ برای همین تا پایانِ تمدیدِ در جریان، همه‌ی
+// صدازننده‌ها منتظرِ همان Promise واحد می‌مانند (dedupe).
+let refreshPromise = null;
+const refreshAccessToken = async () => {
+    const refreshToken = getRefreshToken();
+    if (!refreshToken) return null;
+
+    if (!refreshPromise) {
+        refreshPromise = (async () => {
+            try {
+                // skipAuth: این خودشِ درخواستِ تمدید است؛ نباید واردِ منطقِ ۴۰۱/
+                // تمدیدِ apiRequest شود (وگرنه حلقه می‌سازیم).
+                const data = await apiPost(
+                    endpoints.tokenRefresh,
+                    { refresh: refreshToken },
+                    { skipAuth: true },
+                );
+                if (data?.access) setToken(data.access);
+                // با تنظیمِ فعلیِ ROTATE_REFRESH_TOKENS=False توکنِ Refreshِ تازه‌ای
+                // برگردانده نمی‌شود؛ ولی اگر یک روز روشن شد، همین سطر آن را هم
+                // بی‌صدا ذخیره می‌کند (آینده‌نگر).
+                if (data?.refresh) setRefreshToken(data.refresh);
+                return data?.access ?? null;
+            } catch {
+                // ۴۰۱/خطایِ سرور در خودِ تمدید = نشست تمام؛ null یعنی «تمدید نشد»
+                return null;
+            } finally {
+                refreshPromise = null;
+            }
+        })();
+    }
+    return refreshPromise;
+};
 
 // ---------------------------------------------------------------------
 // توابع کمکیِ رابط کاربریِ مشترک
@@ -229,6 +309,7 @@ const requireAuth = () => {
 // خروج از حساب: پاک‌کردنِ توکن/نام کاربری از مرورگر و بازگشت به صفحه‌ی ورود
 const logout = () => {
     clearToken();
+    clearRefreshToken();
     clearStoredUsername();
     window.location.href = 'login.html';
 };
@@ -865,6 +946,12 @@ const handleLogin = () => {
     const form = document.getElementById('loginForm');
     if (!form) return;
 
+    // اگر کاربر به‌خاطرِ انقضای نشست به این صفحه آمده باشد (?expired=1)،
+    // یک توضیحِ کوتاه نشان بده تا معلوم شود چرا وسطِ کار بیرون افتاد.
+    if (new URLSearchParams(window.location.search).get('expired')) {
+        showToast('نشست شما منقضی شده بود؛ لطفاً دوباره وارد شوید.', 'info');
+    }
+
     form.addEventListener('submit', async (event) => {
         event.preventDefault();
         const username = form.username.value.trim();
@@ -883,6 +970,9 @@ const handleLogin = () => {
                 { skipAuth: true },
             );
             setToken(data.access);
+            // توکنِ Refresh را هم ذخیره می‌کنیم (رفعِ 2026-09-06): بعد از انقضایِ
+            // توکنِ دسترسی، apiRequest بی‌صدا همین توکن را برایِ تمدید می‌فرستد.
+            if (data.refresh) setRefreshToken(data.refresh);
             setStoredUsername(username);
             showToast('ورود موفقیت‌آمیز بود.', 'success');
             window.location.href = 'index.html';
