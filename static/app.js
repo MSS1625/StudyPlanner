@@ -537,7 +537,9 @@ const renderExams = (exams) => {
         const actionsTd = row.lastElementChild;
         const editBtn = document.createElement('button');
         editBtn.type = 'button';
-        editBtn.className = 'ghost-button ghost-button--sm';
+        // btn-edit: دکمه‌ی قرصیِ مخصوصِ سطحِ سفیدِ جدول — آیکونِ مداد با CSS mask
+        editBtn.className = 'btn-edit';
+        editBtn.title = 'ویرایش این امتحان';
         editBtn.textContent = 'ویرایش';
         editBtn.addEventListener('click', () => startExamEdit(exam));
         actionsTd.appendChild(editBtn);
@@ -646,7 +648,7 @@ const renderStudyLogs = (logs) => {
             <td>${log.date}</td>
             <td>${log.hours_studied} ساعت</td>
             <td>${log.notes ? log.notes : '-'}</td>
-            <td><button type="button" class="ghost-button ghost-button--sm" data-log-id="${log.id}">حذف</button></td>
+            <td><button type="button" class="btn-danger-sm" data-log-id="${log.id}">حذف</button></td>
         `;
         tbody.appendChild(row);
     });
