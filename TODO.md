@@ -18,8 +18,9 @@
 > آیتمِ «محدودیتِ یکتاییِ `StudyPlan.user` در سطحِ دیتابیس» در 2026-09-05 انجام شد: فیلدِ `user` به `OneToOneField` تبدیل شد (Migrationِ `0008`، همراهِ پاکسازیِ رکوردهایِ تکراریِ احتمالیِ قدیمی) و POST دوباره به `/api/study-plan/` حالا پاسخِ ۴۰۰ خوانا می‌گیرد — شرحِ کامل در `CHANGELOG.md`.
 > آیتمِ «افزودنِ Pagination به Endpointهای فهرستی» در 2026-09-06 انجام شد: کلاسِ `OptionalPageNumberPagination` رویِ سه ViewSet درس/امتحان/گزارش — صفحه‌بندی فقط با `?page=`/`?page_size=` فعال می‌شود (بدونِ آنها همان لیستِ کاملِ قبلی، پس فرانت‌اندِ فعلی دست‌نخورده ماند)؛ سقفِ `page_size` صد رکورد است و ۹ تستِ جدید (مجموع ۷۹) پوششش می‌دهد — شرحِ کامل در `CHANGELOG.md`.
 > آیتمِ «نبودِ هدایت به صفحه‌ی ورود هنگامِ انقضای توکن» در 2026-09-06 انجام شد: مسیرِ `POST /api/auth/refresh/` (TokenRefreshView) + ذخیره‌ی refresh token در `handleLogin` + تمدیدِ بی‌صدا و تلاشِ مجدد در `apiRequest` هنگامِ 401 + هدایت به `login.html?expired=1` وقتی تمدید ممکن نباشد — شرحِ کامل در `CHANGELOG.md`.
+> آیتمِ «بازبینیِ تنظیماتِ امنیتیِ پیش از استقرار» در 2026-09-06 انجام شد: `SECRET_KEY`/`DEBUG`/`ALLOWED_HOSTS`/`CORS` از متغیرهایِ محیطی خوانده می‌شوند (پیش‌فرض‌ها همانِ توسعه؛ بدونِ هیچ متغیری هیچ چیز عوض نمی‌شود) + سپرِ راه‌اندازیِ Production — ۷ تستِ جدید (مجموع ۸۹) — شرحِ کامل در `CHANGELOG.md`.
+> در حالِ حاضر آیتمِ بازیِ دیگری در این بخش نیست.
 
-- **بازبینیِ تنظیماتِ امنیتی پیش از استقرار**: `DEBUG=True`, `SECRET_KEY` هاردکدشده در `settings.py`, و `CORS_ALLOW_ALL_ORIGINS=True` همگی مناسبِ محیطِ توسعه‌اند، نه Production. *(منبع: `README.md` بخشِ ۱۱، `backend/backend/settings.py`)*
 
 ## Low Priority
 > آیتمِ «آسیب‌پذیریِ XSS در رندرِ فرانت‌اند» در 2026-09-04 به‌طورِ کامل رفع شد: همه‌ی رندرکننده‌های `app.js` (`renderSubjects`/`renderStudyLogs`/`renderDashboard`/`renderPlan`/`renderExams`) داده‌ی متنی را با `escapeHtml` پاک‌سازی می‌کنند — شرح در `CHANGELOG.md`.

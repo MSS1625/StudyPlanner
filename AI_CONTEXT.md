@@ -46,7 +46,7 @@ django-cors-headers>=4.4
 | `utils.py` | **قلبِ الگوریتمی**: `compute_subject_progress`, `generate_study_plan`, `format_plan_for_frontend`, `build_subject_distribution` |
 | `admin.py` | ثبتِ مدل‌ها در پنلِ `/admin/` |
 | `management/commands/seed_demo_data.py` | دستورِ تولیدِ داده‌ی نمونه برای تست |
-| `tests.py` | ۸۲ تستِ خودکارِ Django/DRF: هشت کلاسِ API (Auth تا الگوریتم؛ Auth شامل تست‌های تمدیدِ توکن) + کلاسِ `PaginationAPITests` (صفحه‌بندیِ اختیاری) + کلاسِ `StudyPlanUniqueConstraintTests` با `TransactionTestCase` برای قیدِ DB؛ اجرا با `python manage.py test planner` |
+| `tests.py` | ۸۹ تستِ خودکارِ Django/DRF: هشت کلاسِ API (Auth تا الگوریتم؛ Auth شامل تست‌های تمدیدِ توکن) + کلاسِ `PaginationAPITests` (صفحه‌بندیِ اختیاری) + کلاسِ `SettingsEnvVarsTests` (متغیرهایِ محیطیِ Production؛ شاملِ بوتِ واقعیِ مفسرِ جدا) + کلاسِ `StudyPlanUniqueConstraintTests` با `TransactionTestCase` برای قیدِ DB؛ اجرا با `python manage.py test planner` |
 | `migrations/0001` تا `0008` | تاریخچه‌ی واقعیِ تکاملِ اسکیمای دیتابیس (تاریخ‌ها در `CHANGELOG.md`) |
 
 ### فرانت‌اند (`static/`)
@@ -92,6 +92,8 @@ User → StudyPlan (1→N در سطحِ مدل، ولی در عمل هر کار�
 ۶.۸ **الگوریتمِ `generate_study_plan` سقفِ ۶۰ روز دارد** (`min((last_exam_date - today).days + 1, 60)`) تا برای امتحان‌های خیلی دور، محاسبه‌ی بی‌فایده انجام نشود. نمای «هفتگی» فقط از ۷ روزِ اول استفاده می‌کند، پس این سقف تأثیری در نتیجه‌ی نمایشی ندارد.
 
 ۶.۹ **صفحه‌بندیِ لیست‌ها «اختیاری» است و باید همین‌طور بماند.** از 2026-09-06 کلاسِ `OptionalPageNumberPagination` رویِ `SubjectViewSet`/`ExamViewSet`/`StudyLogViewSet` نشسته: تا وقتی کلاینت نه `?page=` فرستاده و نه `?page_size=`، پاسخ همان «لیستِ کاملِ JSON» است — فرانت‌اندِ فعلیِ `app.js` پارامتری نمی‌فرستد و اگر این پیش‌فرضِ «لیستِ کامل» بشکند، همه‌ی صفحاتِ فهرست می‌شکنند. قواعد: سقفِ `page_size` صد رکورد؛ فقط `?page=` یعنی اندازه‌ی ۲۰؛ `page_size` نامعتبر/غیرمثبتِ تنها → صفحه‌بندی غیرفعال؛ صفحه‌ی نامعتبر → ۴۰۴. مرتب‌سازیِ قطعی از `Meta.ordering` خودِ مدل‌ها می‌آید (درس: جدیدترین اول؛ امتحان: نزدیک‌ترین تاریخ اول؛ گزارش: جدیدترین اول).
+۶.۱۰ **پیش‌فرض‌هایِ تنظیمات باید «dev-safe» بمانند و سپرِ Production حذف نشود.** از 2026-09-06 مقادیرِ حساس از متغیرهایِ محیطی خوانده می‌شوند (`DJANGO_SECRET_KEY`/`DJANGO_DEBUG`/`DJANGO_ALLOWED_HOSTS`/`DJANGO_CORS_ALLOW_ALL`/`DJANGO_ALLOWED_ORIGINS`)؛ بدونِ هیچ متغیری باید دقیقاً همانِ رفتارِ قبلی برقرار باشد (تستِ `test_boot_dev_defaults_unchanged` رگرسیونش است). دو سپرِ راه‌اندازی (DEBUG=false با کلیدِ توسعه → خطا؛ بدونِ Host → خطا) عمداً هستند: حذفِ آنها یعنی بوتِ بی‌صدایِ ناامن در Production. بولی‌ها فقط با `1`/`true`/`yes`/`on` مثبت می‌شوند — مقادیرِ دیگر (حتیِ «2») عمداً منفی‌اند تا مقدارِ اشتباهِ env، بی‌صدا حالتِ امن را باز نکند.
+
 ## ۷. Conventions رعایت‌شده در کد
 
 - تمامِ کامنت‌های کد و پیام‌های خطا/UI به **فارسی** نوشته شده‌اند؛ نام‌های متغیر/تابع/کلاس به **انگلیسی**.
@@ -108,13 +110,15 @@ JWT با `djangorestframework-simplejwt`. توکنِ دسترسی: ۱ روز. ت
 
 | تنظیم | مقدار فعلی | نکته |
 |---|---|---|
-| `DEBUG` | `True` | فقط برای توسعه |
-| `CORS_ALLOW_ALL_ORIGINS` | `True` | فقط برای توسعه |
+| `DEBUG` | از `DJANGO_DEBUG`؛ پیش‌فرض `True` | فقط برای توسعه؛ در Production = false (سپرِ بوت فعال می‌شود) |
+| `SECRET_KEY` | از `DJANGO_SECRET_KEY`؛ پیش‌فرض = کلیدِ توسعه | در Production کلیدِ واقعی (الزامی) |
+| `ALLOWED_HOSTS` | از `DJANGO_ALLOWED_HOSTS`؛ پیش‌فرض خالی | در Production الزامی (سپرِ بوت) |
+| `CORS_ALLOW_ALL_ORIGINS` | از `DJANGO_CORS_ALLOW_ALL`؛ پیش‌فرض `True` | در Production = false + `DJANGO_ALLOWED_ORIGINS` |
 | `DATABASES` | SQLite | فایلِ `backend/db.sqlite3` |
 | `STATICFILES_DIRS` | `[BASE_DIR.parent / 'static']` | فرانت‌اند را هم سرو می‌کند |
 | `SIMPLE_JWT` | دسترسی ۱ روز / تمدید ۷ روز | Rotation خاموش است |
 
-هیچ فایلِ `.env` در پروژه نیست؛ همه‌ی مقادیر مستقیم در `settings.py` هاردکد شده‌اند (شاملِ `SECRET_KEY`).
+پیش‌فرض‌ها عمداً «dev-safe»اند: بدونِ ست‌کردنِ هیچ متغیری، همان رفتارِ قبل از 2026-09-06 برقرار است (۸۹ تست بدونِ متغیر سبز می‌شوند). فایلِ `.env` هنوز وجود ندارد و کتابخانه‌ی dotenv هم اضافه نشده؛ متغیرها با `set`/`setx` (ویندوز) یا `export` (لینوکس) ست می‌شوند — جدولِ کامل در `README.md` بخشِ ۱۰.
 
 ## ۱۰. فایل‌های مستندات مرتبط
 

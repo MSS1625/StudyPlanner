@@ -10,7 +10,10 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
+import os
 from pathlib import Path
+
+from django.core.exceptions import ImproperlyConfigured
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -20,15 +23,55 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-_2yv1re!edx4&9c5+=2e)t37xml-dnc5s08-5%#s++a%9awr-n'
+# از 2026-09-06 مقادیرِ حساس از «متغیرهایِ محیطی» خوانده می‌شوند؛ اگر ست
+# نشده باشند، همان مقدارِ توسعه (dev) قبلی اعمال می‌شود تا اجرایِ محلیِ
+# بدونِ هیچ متغیری ذره‌ای تغییر نکند. مقادیرِ بولیِ مثبتِ پذیرفته:
+# 1 / true / yes / on (بدونِ حساسیت به بزرگ/کوچکی).
+
+
+def _env_bool(name, default=False):
+    """متغیرِ محیطی را به‌عنوانِ boolean می‌خواند (فقط مقادیرِ مثبتِ صریح)."""
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == '':
+        return default
+    return raw.strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def _env_list(name):
+    """متغیرِ محیطیِ «جدا‌شده با کاما» را به فهرستِ تمیزشده تبدیل می‌کند."""
+    return [item.strip() for item in os.environ.get(name, '').split(',') if item.strip()]
+
+
+# کلیدِ توسعه: فقط مناسبِ اجرایِ محلی است (چون در مخزنِ عمومی دیده می‌شود).
+# برایِ Production متغیرِ DJANGO_SECRET_KEY را با یک کلیدِ واقعی ست کنید:
+#   python -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"
+_DEV_SECRET_KEY = 'django-insecure-_2yv1re!edx4&9c5+=2e)t37xml-dnc5s08-5%#s++a%9awr-n'
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', _DEV_SECRET_KEY)
 
 # SECURITY WARNING: don't run with debug turned on in production!
 # DEBUG=True یعنی خطاها با جزئیاتِ کامل (Traceback) در مرورگر نمایش داده
 # می‌شوند و فایل‌های استاتیک هم خودکار سرو می‌شوند؛ این حالت فقط برای
 # توسعه‌ی محلی مناسب است، نه برای انتشار واقعیِ سایت (Production).
-DEBUG = True
+DEBUG = _env_bool('DJANGO_DEBUG', default=True)
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = _env_list('DJANGO_ALLOWED_HOSTS')
+
+# سپرِ راه‌اندازیِ Production: اجرا در حالتِ DEBUG=false با کلیدِ توسعه یا
+# بدونِ ALLOWED_HOSTS از همانِ ابتدا با پیامِ روشنِ راهنما متوقف می‌شود —
+# بهتر از بوتِ بی‌صدا در حالتِ ناامن یا خطاهایِ ۴۰۰ِ گیج‌کننده‌ی بعداً.
+if not DEBUG:
+    if SECRET_KEY == _DEV_SECRET_KEY:
+        raise ImproperlyConfigured(
+            'Production mode (DJANGO_DEBUG=false) requires a real DJANGO_SECRET_KEY '
+            'instead of the development key. Generate one with: '
+            'python -c "from django.core.management.utils import '
+            'get_random_secret_key; print(get_random_secret_key())"'
+        )
+    if not ALLOWED_HOSTS:
+        raise ImproperlyConfigured(
+            'Production mode (DJANGO_DEBUG=false) requires DJANGO_ALLOWED_HOSTS '
+            '(comma-separated hosts, e.g. "example.com,www.example.com").'
+        )
 
 
 # Application definition
@@ -162,7 +205,12 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # اجازه می‌دهد از هر دامنه/مبدأیی (حتی وقتی فرانت‌اند روی پورتِ دیگری اجرا
 # شود) به این API درخواست زده شود. مناسبِ توسعه است؛ برای انتشارِ واقعی
 # باید با CORS_ALLOWED_ORIGINS به دامنه‌ی مشخصِ فرانت‌اند محدود شود.
-CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_ALL_ORIGINS = _env_bool('DJANGO_CORS_ALLOW_ALL', default=True)
+
+# وقتی DJANGO_CORS_ALLOW_ALL=false است فقط این مبدأها مجازند (با کاما جدا
+# کنید و scheme کامل بنویسید، مثلِ https://example.com). در حالتِ توسعه
+# خالی می‌ماند چون allow-all فعال است.
+CORS_ALLOWED_ORIGINS = _env_list('DJANGO_ALLOWED_ORIGINS')
 
 # REST Framework settings
 # تنظیماتِ سراسریِ DRF: همه‌ی Viewها به‌صورت پیش‌فرض این دو رفتار را دارند

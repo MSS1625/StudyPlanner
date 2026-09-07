@@ -13,6 +13,7 @@
 #   - DashboardAPITests ....... شکلِ پاسخ، شمارش‌ها و انواعِ هشدار
 #   - StudyPlanAlgorithmTests . تستِ واحدِ توابعِ خالصِ utils.py
 #   - PaginationAPITests ...... صفحه‌بندیِ اختیاریِ endpointهای لیستی (?page/?page_size)
+#   - SettingsEnvVarsTests .... تنظیماتِ محیطیِ Production (بوتِ مفسرِ جدا؛ بدونِ DB)
 #
 # اجرا (از پوشه‌ی backend):
 #   python manage.py test planner -v 2
@@ -26,15 +27,21 @@
 #     خورده تا هدفش مستند بماند.
 # ----------------------------------------------------------------------------
 
+import os
+import subprocess
+import sys
 from datetime import date, timedelta
+from pathlib import Path
+from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.db import IntegrityError
-from django.test import TransactionTestCase
+from django.test import SimpleTestCase, TransactionTestCase
 from rest_framework import status
 from rest_framework.test import APIClient, APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from backend.settings import _env_bool, _env_list
 from .models import Subject, Exam, StudyLog, StudyPlan
 from .utils import (
     compute_subject_progress,
@@ -1118,3 +1125,128 @@ class PaginationAPITests(BaseAPITestCase):
         self.assertIsNone(size_for({'page_size': '0'}))        # غیرمثبت
         # نامعتبر همراه با page → به اندازه‌ی پیش‌فرض می‌افتد
         self.assertEqual(size_for({'page': '2', 'page_size': 'abc'}), 20)
+
+
+# ---------------------------------------------------------------------------
+# تنظیماتِ محیطیِ Production (از 2026-09-06 — بستنِ آیتمِ Medium TODO)
+# ---------------------------------------------------------------------------
+
+class SettingsEnvVarsTests(SimpleTestCase):
+    """
+    متغیرهایِ محیطیِ `settings.py` — دو لایه:
+
+    ۱) تستِ واحدِ توابعِ کمکیِ `_env_bool`/`_env_list` (بدونِ دیتابیس).
+    ۲) «بوتِ واقعی»: هر تست یک مفسرِ پایتونِ تازه spawn می‌کند
+       (``python -c "import django; django.setup()"``) با متغیرهایِ دلخواه،
+       تا تنظیماتِ همانِ محیطِ ساختگی — نه محیطِ همین فرایندِ تست —
+       واقعاً بارگذاری و ارزیابی شود (شاملِ سپرِ راه‌اندازیِ Production).
+    """
+
+    _ENV_KEYS = (
+        'DJANGO_SECRET_KEY', 'DJANGO_DEBUG', 'DJANGO_ALLOWED_HOSTS',
+        'DJANGO_CORS_ALLOW_ALL', 'DJANGO_ALLOWED_ORIGINS',
+    )
+
+    def _boot(self, extra_env, code):
+        """مفسرِ تازه‌ای با متغیرهایِ داده‌شده بالا می‌آورد و نتیجه را برمی‌گرداند."""
+        env = os.environ.copy()
+        env['DJANGO_SETTINGS_MODULE'] = 'backend.settings'
+        for key in self._ENV_KEYS:
+            env.pop(key, None)          # نشتِ محیطِ تست به نتیجه نداشته باشد
+        env.update(extra_env)
+        return subprocess.run(
+            [sys.executable, '-c', code],
+            capture_output=True, text=True, env=env,
+            cwd=str(Path(__file__).resolve().parents[1]),   # پوشه‌ی backend/
+            timeout=90,
+        )
+
+    # ---- ۱) توابعِ کمکی ------------------------------------------------------
+
+    def test_env_bool_parsing(self):
+        """رگرسیون: فقط 1/true/yes/on مثبت‌اند؛ هر چیزِ دیگر منفی؛ بی‌مقدار → default."""
+        for raw in ('1', 'true', 'TRUE', 'True', 'yes', 'YES', 'on', 'ON', ' 1 ', ' true '):
+            with patch.dict(os.environ, {'DJANGO_TEST_BOOL': raw}):
+                self.assertIs(_env_bool('DJANGO_TEST_BOOL'), True, msg=raw)
+        for raw in ('0', 'false', 'FALSE', 'no', 'off', 'OFF', '', '   ', 'banana', '2', '01'):
+            with patch.dict(os.environ, {'DJANGO_TEST_BOOL': raw}):
+                self.assertIs(_env_bool('DJANGO_TEST_BOOL'), False, msg=raw)
+        # بی‌مقدار → مقدارِ پیش‌فرض (در هر دو جهت)
+        os.environ.pop('DJANGO_TEST_BOOL', None)
+        self.assertIs(_env_bool('DJANGO_TEST_BOOL', default=True), True)
+        self.assertIs(_env_bool('DJANGO_TEST_BOOL', default=False), False)
+
+    def test_env_list_parsing(self):
+        """رگرسیون: جداکننده‌ی کاما + چشم‌پوشی از فاصله‌ها و خانه‌های خالی."""
+        with patch.dict(os.environ, {'DJANGO_TEST_LIST': 'a, b ,, c ,'}):
+            self.assertEqual(_env_list('DJANGO_TEST_LIST'), ['a', 'b', 'c'])
+        with patch.dict(os.environ, {'DJANGO_TEST_LIST': ''}):
+            self.assertEqual(_env_list('DJANGO_TEST_LIST'), [])
+        os.environ.pop('DJANGO_TEST_LIST', None)
+        self.assertEqual(_env_list('DJANGO_TEST_LIST'), [])
+
+    # ---- ۲) بوتِ واقعی با تنظیماتِ تازه ---------------------------------------
+
+    def test_boot_dev_defaults_unchanged(self):
+        """بدونِ هیچ متغیری: دقیقاً همان رفتارِ توسعه‌ی قبل — بوت می‌شود."""
+        code = (
+            'import django; django.setup(); from django.conf import settings; '
+            'assert settings.DEBUG is True, "DEBUG"; '
+            'assert settings.CORS_ALLOW_ALL_ORIGINS is True, "CORS"; '
+            'assert settings.SECRET_KEY, "KEY"; '
+            'assert settings.ALLOWED_HOSTS == [], "HOSTS"; '
+            'print("dev-ok")'
+        )
+        result = self._boot({}, code)
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn('dev-ok', result.stdout)
+
+    def test_prod_without_secret_key_refuses_to_boot(self):
+        """سپر: DEBUG=false با کلیدِ توسعه از همانِ بوت متوقف می‌شود."""
+        result = self._boot({'DJANGO_DEBUG': 'false'}, 'import django; django.setup()')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('DJANGO_SECRET_KEY', result.stderr)
+
+    def test_prod_without_allowed_hosts_refuses_to_boot(self):
+        """سپر: DEBUG=false بدونِ DJANGO_ALLOWED_HOSTS هم متوقف می‌شود."""
+        result = self._boot(
+            {'DJANGO_DEBUG': 'false', 'DJANGO_SECRET_KEY': 'p' * 64},
+            'import django; django.setup()',
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('DJANGO_ALLOWED_HOSTS', result.stderr)
+
+    def test_prod_with_env_boots_with_production_values(self):
+        """ترکیبِ کاملِ متغیرها: بوتِ سالم با مقادیرِ Production."""
+        key = 'p' * 64
+        code = (
+            'import django; django.setup(); from django.conf import settings; '
+            'assert settings.DEBUG is False, "DEBUG"; '
+            "assert settings.SECRET_KEY == '{0}', 'KEY'; "
+            "assert settings.ALLOWED_HOSTS == ['example.com', 'www.example.com'], 'HOSTS'; "
+            'print("prod-ok")'
+        ).format(key)
+        result = self._boot(
+            {'DJANGO_DEBUG': 'false', 'DJANGO_SECRET_KEY': key,
+             'DJANGO_ALLOWED_HOSTS': 'example.com, www.example.com'},
+            code,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn('prod-ok', result.stdout)
+
+    def test_cors_env_overrides(self):
+        """CORS: خاموش‌کردنِ allow-all + فهرستِ مبدأهایِ مجاز از متغیر."""
+        code = (
+            'import django; django.setup(); from django.conf import settings; '
+            'assert settings.CORS_ALLOW_ALL_ORIGINS is False, "ALL"; '
+            "assert settings.CORS_ALLOWED_ORIGINS == "
+            "['https://a.com', 'https://b.com'], 'ORIG'; "
+            'print("cors-ok")'
+        )
+        result = self._boot(
+            {'DJANGO_CORS_ALLOW_ALL': 'false',
+             'DJANGO_ALLOWED_ORIGINS': 'https://a.com,https://b.com'},
+            code,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn('cors-ok', result.stdout)
