@@ -49,7 +49,7 @@
 - **`SECRET_KEY` و `DEBUG`**: کلید امنیتیِ رمزنگاریِ داخلیِ جنگو (برای امضای Session، توکن‌های CSRF و...) و حالتِ توسعه (`DEBUG=True`) که خطاهای کامل را نمایش می‌دهد و فایل‌های استاتیک را خودکار سرو می‌کند. از 2026-09-06 هر دو از متغیرهایِ محیطیِ `DJANGO_SECRET_KEY`/`DJANGO_DEBUG` خوانده می‌شوند و پیش‌فرض‌ها همانِ مقادیرِ توسعه‌اند (جدولِ متغیرها در `README.md` بخشِ ۱۰).
 - **متغیرهایِ محیطی (از 2026-09-06)**: `SECRET_KEY`، `DEBUG`، `ALLOWED_HOSTS`، `CORS_ALLOW_ALL_ORIGINS` و `CORS_ALLOWED_ORIGINS` از متغیرهایِ محیطیِ `DJANGO_SECRET_KEY`، `DJANGO_DEBUG`، `DJANGO_ALLOWED_HOSTS`، `DJANGO_CORS_ALLOW_ALL` و `DJANGO_ALLOWED_ORIGINS` خوانده می‌شوند؛ بدونِ هیچ متغیری همانِ مقادیرِ توسعه‌ی قبلی اعمال می‌شود (۸۹ تست بدونِ متغیر سبزند). سپرِ راه‌اندازی: در حالتِ `DEBUG=false`، کلیدِ توسعه یا `ALLOWED_HOSTS`ِ خالی، بوت را با `ImproperlyConfigured` متوقف می‌کند — همانِ ابتدا و با پیامِ راهنما، نه با خطایِ مبهم در میانه‌ی کار.
 
-- **`INSTALLED_APPS`**: فهرست تمام اپلیکیشن‌های فعال. شامل اپ‌های داخلیِ جنگو (`admin`, `auth`, `staticfiles`...)، کتابخانه‌های شخص‌ثالث نصب‌شده با pip (`rest_framework` برای ساختِ API، `rest_framework_simplejwt` برای احراز هویتِ JWT، `corsheaders` برای مدیریتِ درخواست‌های Cross-Origin)، و در نهایت اپلیکیشنِ خودِ پروژه (`planner`) که تمام منطقِ دامنه در آن است.
+- **`INSTALLED_APPS`**: فهرست تمام اپلیکیشن‌های فعال. شامل اپ‌های داخلیِ جنگو (`admin`, `auth`, `staticfiles`...)، کتابخانه‌های شخص‌ثالث نصب‌شده با pip (`rest_framework` برای ساختِ API، `rest_framework_simplejwt` برای احراز هویتِ JWT، `corsheaders` برای مدیریتِ درخواست‌های Cross-Origin، و `rest_framework_simplejwt.token_blacklist` — از 2026-09-08: جدول‌های لیستِ سیاهِ توکن که با یک‌بار migrate ساخته می‌شوند)، و در نهایت اپلیکیشنِ خودِ پروژه (`planner`) که تمام منطقِ دامنه در آن است.
 
 - **`MIDDLEWARE`**: زنجیره‌ای از کدهایی که روی هر درخواست/پاسخ اجرا می‌شوند. `CorsMiddleware` عمداً نزدیک بالای لیست قرار گرفته تا هدرهای CORS به همه‌ی پاسخ‌ها اضافه شود؛ بقیه (Security، Session، CSRF، Authentication، Messages، Clickjacking) پیش‌فرض‌های استاندارد جنگو هستند.
 
@@ -69,7 +69,7 @@
   - `DEFAULT_AUTHENTICATION_CLASSES`: کاربر از روی توکن JWT در هدرِ `Authorization` شناسایی می‌شود.
   - `DEFAULT_PERMISSION_CLASSES`: به‌صورت پیش‌فرض هیچ درخواستی بدونِ لاگین پذیرفته نمی‌شود؛ فقط مسیرهایی مثل ثبت‌نام/ورود صراحتاً با `AllowAny` این قانون را دور می‌زنند (توضیح در بخش ۲).
 
-- **`SIMPLE_JWT`**: تنظیماتِ کتابخانه‌ی JWT — توکنِ «دسترسی» ۱ روز و توکنِ «تمدید» ۷ روز اعتبار دارد؛ هدر باید به‌شکلِ `Authorization: Bearer <token>` فرستاده شود.
+- **`SIMPLE_JWT`**: تنظیماتِ کتابخانه‌ی JWT — توکنِ «دسترسی» ۱ روز و توکنِ «تمدید» ۷ روز اعتبار دارد؛ هدر باید به‌شکلِ `Authorization: Bearer <token>` فرستاده شود. از 2026-09-08 چرخش و لیستِ سیاه فعال است: هر تمدید توکنِ Refreshِ تازه صادر می‌کند و قبلی را باطل می‌کند (`ROTATE_REFRESH_TOKENS`/`BLACKLIST_AFTER_ROTATION`)؛ خروجِ سرور-محور هم با `POST /api/auth/logout/` توکن را ابطال می‌کند.
 
 ---
 

@@ -11,7 +11,11 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 # TokenRefreshView: ویوی آماده‌ی SimpleJWT برای «تمدیدِ توکنِ دسترسی» —
 # بدنه‌ی {"refresh": "..."} می‌گیرد و توکنِ دسترسیِ تازه برمی‌گرداند.
-from rest_framework_simplejwt.views import TokenRefreshView
+# TokenBlacklistView: ویوی آماده‌ی SimpleJWT برای «ابطالِ توکنِ Refresh» —
+# بدنه‌ی {"refresh": "..."} می‌گیرد و آن توکن را در لیستِ سیاه ثبت می‌کند
+# (لازمه‌ی فعال‌بودنش: اپِ rest_framework_simplejwt.token_blacklist در
+# INSTALLED_APPS — از 2026-09-08 فعال است).
+from rest_framework_simplejwt.views import TokenBlacklistView, TokenRefreshView
 from . import views
 
 router = DefaultRouter()
@@ -42,5 +46,11 @@ urlpatterns = [
     # هدایت می‌کند). این ویو مثلِ register/login بدونِ هدرِ Authorization در دسترس است
     # (خودِ توکنِ Refresh اثباتِ هویت است، نه هدر).
     path('auth/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+    # خروجِ سرور-محور (از 2026-09-08): فرانت‌اند موقعِ خروج، توکنِ Refreshِ
+    # ذخیره‌شده را به این مسیر می‌فرستد تا رویِ سرور باطل شود؛ بعد از این،
+    # حتی اگر کسی localStorage را دزدیده باشد، آن توکن دیگر قابلِ تمدید نیست
+    # (تا ۷ روزِ قبل از این تغییر، توکنِ خروج‌شده تا پایانِ عمرش معتبر می‌ماند).
+    # این ویو هم مثلِ refresh بدونِ هدرِ Authorization در دسترس است.
+    path('auth/logout/', TokenBlacklistView.as_view(), name='token_blacklist'),
     path('dashboard/', views.dashboard, name='dashboard'),
 ]

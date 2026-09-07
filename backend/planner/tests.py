@@ -5,6 +5,7 @@
 # ساختار:
 #   - BaseAPITestCase ......... کلاسِ پایه‌ی مشترک (دو کاربرِ نمونه + کلاینتِ JWT)
 #   - AuthAPITests ............ ثبت‌نام/ورود و جریانِ توکن JWT
+#   - JWTTokenRotationBlacklistTests ‌چرخشِ توکنِ Refresh + لیستِ سیاه + خروجِ سرور-محور (2026-09-08)
 #   - SubjectAPITests ......... CRUD درس + یکتاییِ نام + جداسازی کاربران
 #   - ExamAPITests ............ CRUD امتحان + ویرایش (PATCH) + سناریوهای امنیتی
 #   - StudyLogAPITests ........ ثبتِ گزارش + کسرِ ساعتِ امتحان + جداسازی
@@ -214,6 +215,130 @@ class AuthAPITests(BaseAPITestCase):
             with self.subTest(url=url):
                 response = self.client.get(url)
                 self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+# ---------------------------------------------------------------------------
+# ۱-ب) چرخش و لیستِ سیاهِ توکنِ Refresh (ROTATE/BLACKLIST — از 2026-09-08)
+# ---------------------------------------------------------------------------
+
+class JWTTokenRotationBlacklistTests(BaseAPITestCase):
+    """
+    پوششِ رفتارِ پس از فعال‌شدنِ ROTATE_REFRESH_TOKENS و BLACKLIST_AFTER_ROTATION
+    (به‌همراه‌ی اپِ token_blacklist در INSTALLED_APPS):
+
+    - هر تمدید، توکنِ Refreshِ تازه صادر می‌کند و توکنِ قبلی باطل می‌شود
+      (هر توکنِ تمدید فقط یک‌بار قابلِ استفاده است — مهاجمی که توکن را دزدیده
+      باشد، با اولین تمدیدِ مالکِ واقعی از بازی خارج می‌شود).
+    - خروجِ سرور-محور: POST /api/auth/logout/ (TokenBlacklistView) توکنِ
+      Refreshِ داده‌شده را در لیستِ سیاه ثبت می‌کند.
+
+    فرانت‌اند از قبل با این رفتار سازگار است: refreshAccessToken در app.js
+    توکنِ تازه را ذخیره می‌کند و logout پیش از پاک‌کردنِ localStorage، توکن
+    را به /api/auth/logout/ می‌فرستد.
+    """
+
+    # --- کمکی‌ها -----------------------------------------------------------
+
+    def _login_refresh(self, username='alice'):
+        """ورودِ واقعی از API و برگرداندنِ توکنِ Refreshِ صادرشده."""
+        body = self.client.post(
+            '/api/auth/login/',
+            {'username': username, 'password': 'pw-12345678'},
+            format='json',
+        ).json()
+        return body['refresh']
+
+    def _rotate(self, refresh):
+        """POST به مسیرِ تمدید با توکنِ Refreshِ داده‌شده."""
+        return self.client.post(
+            '/api/auth/refresh/', {'refresh': refresh}, format='json'
+        )
+
+    # --- چرخش --------------------------------------------------------------
+
+    def test_refresh_returns_new_refresh_token(self):
+        """چرخش: پاسخِ تمدید حالا توکنِ Refreshِ تازه هم دارد (متفاوت از قبلی)."""
+        old_refresh = self._login_refresh()
+
+        response = self._rotate(old_refresh)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        body = response.json()
+        self.assertIn('refresh', body)
+        self.assertTrue(body['refresh'])
+        self.assertNotEqual(body['refresh'], old_refresh)
+
+    def test_old_refresh_token_rejected_after_rotation(self):
+        """رگرسیونِ امنیتی: توکنِ Refreshِ قبلی بعد از چرخش باطل است (۴۰۱)."""
+        old_refresh = self._login_refresh()
+        self._rotate(old_refresh)  # چرخشِ اول: توکنِ قبلی واردِ لیستِ سیاه شد
+
+        response = self._rotate(old_refresh)  # استفاده‌ی مجدد از توکنِ مرده
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_rotation_chain_continues(self):
+        """زنجیره‌ی تمدید ادامه دارد: توکنِ تازه هم می‌چرخد؛ نسل‌های قبلی همه مرده‌اند."""
+        r1 = self._login_refresh()
+        r2 = self._rotate(r1).json()['refresh']
+
+        r3 = self._rotate(r2)
+
+        self.assertEqual(r3.status_code, status.HTTP_200_OK)
+        r3 = r3.json()['refresh']
+        self.assertNotEqual(r3, r2)
+        # هر دو نسلِ قبلی باید باطل باشند (توکنِ هر نسل فقط یک‌بار)
+        self.assertEqual(self._rotate(r1).status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(self._rotate(r2).status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_rotated_access_token_works(self):
+        """توکنِ دسترسیِ صادرشده در چرخش، رویِ endpointهای محافظت‌شده واقعاً کار می‌کند
+        (ابطالِ توکنِ Refreshِ قبلی، این توکنِ دسترسی را از کار نمی‌اندازد — عمرش مستقل است)."""
+        old_refresh = self._login_refresh()
+
+        body = self._rotate(old_refresh).json()
+
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {body['access']}")
+        self.assertEqual(client.get('/api/subjects/').status_code, status.HTTP_200_OK)
+
+    # --- خروجِ سرور-محور (TokenBlacklistView) -------------------------------
+
+    def test_logout_blacklists_refresh_token(self):
+        """خروجِ سرور-محور: POST /api/auth/logout/ توکن را باطل می‌کند؛ تمدیدِ بعدی ۴۰۱."""
+        refresh = self._login_refresh()
+
+        response = self.client.post(
+            '/api/auth/logout/', {'refresh': refresh}, format='json'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            self._rotate(refresh).status_code, status.HTTP_401_UNAUTHORIZED
+        )
+
+    def test_logout_with_garbage_token_rejected(self):
+        """توکنِ بی‌اعتبار در خروج: ۴۰۱ (نه ۵۰۰/خطایِ دیگر)."""
+        response = self.client.post(
+            '/api/auth/logout/', {'refresh': 'garbage-token-not-a-jwt'}, format='json'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_logout_blacklists_only_that_token(self):
+        """ابطالِ توکنِ یک نشست، توکنِ نشستِ دیگر (کاربرِ دیگر) را نمی‌کشد."""
+        alice_refresh = self._login_refresh('alice')
+        bob_refresh = self._login_refresh('bob')
+
+        self.client.post(
+            '/api/auth/logout/', {'refresh': alice_refresh}, format='json'
+        )
+
+        self.assertEqual(
+            self._rotate(alice_refresh).status_code,
+            status.HTTP_401_UNAUTHORIZED,
+        )
+        self.assertEqual(self._rotate(bob_refresh).status_code, status.HTTP_200_OK)
 
 
 # ---------------------------------------------------------------------------

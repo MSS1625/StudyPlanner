@@ -46,7 +46,7 @@ django-cors-headers>=4.4
 | `utils.py` | **قلبِ الگوریتمی**: `compute_subject_progress`, `generate_study_plan`, `format_plan_for_frontend`, `build_subject_distribution` |
 | `admin.py` | ثبتِ مدل‌ها در پنلِ `/admin/` |
 | `management/commands/seed_demo_data.py` | دستورِ تولیدِ داده‌ی نمونه برای تست |
-| `tests.py` | ۸۹ تستِ خودکارِ Django/DRF: هشت کلاسِ API (Auth تا الگوریتم؛ Auth شامل تست‌های تمدیدِ توکن) + کلاسِ `PaginationAPITests` (صفحه‌بندیِ اختیاری) + کلاسِ `SettingsEnvVarsTests` (متغیرهایِ محیطیِ Production؛ شاملِ بوتِ واقعیِ مفسرِ جدا) + کلاسِ `StudyPlanUniqueConstraintTests` با `TransactionTestCase` برای قیدِ DB؛ اجرا با `python manage.py test planner` |
+| `tests.py` | ۹۶ تستِ خودکارِ Django/DRF: هشت کلاسِ API (Auth تا الگوریتم؛ Auth شامل تست‌های تمدیدِ توکن) + کلاسِ `JWTTokenRotationBlacklistTests` (چرخش/لیستِ سیاه/خروجِ سرور-محور) + کلاسِ `PaginationAPITests` (صفحه‌بندیِ اختیاری) + کلاسِ `SettingsEnvVarsTests` (متغیرهایِ محیطیِ Production؛ شاملِ بوتِ واقعیِ مفسرِ جدا) + کلاسِ `StudyPlanUniqueConstraintTests` با `TransactionTestCase` برای قیدِ DB؛ اجرا با `python manage.py test planner` |
 | `migrations/0001` تا `0008` | تاریخچه‌ی واقعیِ تکاملِ اسکیمای دیتابیس (تاریخ‌ها در `CHANGELOG.md`) |
 
 ### فرانت‌اند (`static/`)
@@ -93,6 +93,7 @@ User → StudyPlan (1→N در سطحِ مدل، ولی در عمل هر کار�
 
 ۶.۹ **صفحه‌بندیِ لیست‌ها «اختیاری» است و باید همین‌طور بماند.** از 2026-09-06 کلاسِ `OptionalPageNumberPagination` رویِ `SubjectViewSet`/`ExamViewSet`/`StudyLogViewSet` نشسته: تا وقتی کلاینت نه `?page=` فرستاده و نه `?page_size=`، پاسخ همان «لیستِ کاملِ JSON» است — فرانت‌اندِ فعلیِ `app.js` پارامتری نمی‌فرستد و اگر این پیش‌فرضِ «لیستِ کامل» بشکند، همه‌ی صفحاتِ فهرست می‌شکنند. قواعد: سقفِ `page_size` صد رکورد؛ فقط `?page=` یعنی اندازه‌ی ۲۰؛ `page_size` نامعتبر/غیرمثبتِ تنها → صفحه‌بندی غیرفعال؛ صفحه‌ی نامعتبر → ۴۰۴. مرتب‌سازیِ قطعی از `Meta.ordering` خودِ مدل‌ها می‌آید (درس: جدیدترین اول؛ امتحان: نزدیک‌ترین تاریخ اول؛ گزارش: جدیدترین اول).
 ۶.۱۰ **پیش‌فرض‌هایِ تنظیمات باید «dev-safe» بمانند و سپرِ Production حذف نشود.** از 2026-09-06 مقادیرِ حساس از متغیرهایِ محیطی خوانده می‌شوند (`DJANGO_SECRET_KEY`/`DJANGO_DEBUG`/`DJANGO_ALLOWED_HOSTS`/`DJANGO_CORS_ALLOW_ALL`/`DJANGO_ALLOWED_ORIGINS`)؛ بدونِ هیچ متغیری باید دقیقاً همانِ رفتارِ قبلی برقرار باشد (تستِ `test_boot_dev_defaults_unchanged` رگرسیونش است). دو سپرِ راه‌اندازی (DEBUG=false با کلیدِ توسعه → خطا؛ بدونِ Host → خطا) عمداً هستند: حذفِ آنها یعنی بوتِ بی‌صدایِ ناامن در Production. بولی‌ها فقط با `1`/`true`/`yes`/`on` مثبت می‌شوند — مقادیرِ دیگر (حتیِ «2») عمداً منفی‌اند تا مقدارِ اشتباهِ env، بی‌صدا حالتِ امن را باز نکند.
+۶.۱۱ **چرخش و لیستِ سیاهِ توکنِ Refresh نباید خاموش شود و خروج باید توکن را باطل کند.** از 2026-09-08 `ROTATE_REFRESH_TOKENS=True` و `BLACKLIST_AFTER_ROTATION=True` است و اپِ `rest_framework_simplejwt.token_blacklist` در `INSTALLED_APPS` نشسته (جدول‌هایش با یک‌بار `migrate` ساخته می‌شوند): هر تمدید توکنِ Refreshِ تازه صادر می‌کند و قبلی را باطل — توکنِ هر نسل فقط یک‌بار قابلِ استفاده است. `refreshAccessToken` در `app.js` موظف است توکنِ تازه را ذخیره کند (بدونِ آن، نشست بعد از اولین تمدید می‌شکند) و `logout()` باید اول `POST /api/auth/logout/` را بزند و بعد localStorage را پاک کند — قطعیِ سرور در خروج، خروجِ محلی را مسدود نمی‌کند (fail-open عمدی است). رگرسیون‌تست‌ها: کلاسِ `JWTTokenRotationBlacklistTests`.
 
 ## ۷. Conventions رعایت‌شده در کد
 
@@ -116,9 +117,9 @@ JWT با `djangorestframework-simplejwt`. توکنِ دسترسی: ۱ روز. ت
 | `CORS_ALLOW_ALL_ORIGINS` | از `DJANGO_CORS_ALLOW_ALL`؛ پیش‌فرض `True` | در Production = false + `DJANGO_ALLOWED_ORIGINS` |
 | `DATABASES` | SQLite | فایلِ `backend/db.sqlite3` |
 | `STATICFILES_DIRS` | `[BASE_DIR.parent / 'static']` | فرانت‌اند را هم سرو می‌کند |
-| `SIMPLE_JWT` | دسترسی ۱ روز / تمدید ۷ روز | Rotation خاموش است |
+| `SIMPLE_JWT` | دسترسی ۱ روز / تمدید ۷ روز | چرخش + لیستِ سیاه فعال (از 2026-09-08؛ نکته‌ی ۶.۱۱) |
 
-پیش‌فرض‌ها عمداً «dev-safe»اند: بدونِ ست‌کردنِ هیچ متغیری، همان رفتارِ قبل از 2026-09-06 برقرار است (۸۹ تست بدونِ متغیر سبز می‌شوند). فایلِ `.env` هنوز وجود ندارد و کتابخانه‌ی dotenv هم اضافه نشده؛ متغیرها با `set`/`setx` (ویندوز) یا `export` (لینوکس) ست می‌شوند — جدولِ کامل در `README.md` بخشِ ۱۰.
+پیش‌فرض‌ها عمداً «dev-safe»اند: بدونِ ست‌کردنِ هیچ متغیری، همان رفتارِ قبل از 2026-09-06 برقرار است (۹۶ تست بدونِ متغیر سبز می‌شوند). فایلِ `.env` هنوز وجود ندارد و کتابخانه‌ی dotenv هم اضافه نشده؛ متغیرها با `set`/`setx` (ویندوز) یا `export` (لینوکس) ست می‌شوند — جدولِ کامل در `README.md` بخشِ ۱۰.
 
 ## ۱۰. فایل‌های مستندات مرتبط
 

@@ -22,6 +22,9 @@ const API_BASE = 'http://127.0.0.1:8000';
 const endpoints = {
     login: '/api/auth/login/',
     tokenRefresh: '/api/auth/refresh/',
+    // خروجِ سرور-محور (از 2026-09-08): توکنِ Refresh به سرور فرستاده می‌شود
+    // تا باطل شود (لیستِ سیاه) — نه فقط پاک‌شدن از مرورگر.
+    logout: '/api/auth/logout/',
     register: '/api/auth/register/',
     dashboard: '/api/dashboard/',
     subjects: '/api/subjects/',
@@ -210,9 +213,11 @@ const refreshAccessToken = async () => {
                     { skipAuth: true },
                 );
                 if (data?.access) setToken(data.access);
-                // با تنظیمِ فعلیِ ROTATE_REFRESH_TOKENS=False توکنِ Refreshِ تازه‌ای
-                // برگردانده نمی‌شود؛ ولی اگر یک روز روشن شد، همین سطر آن را هم
-                // بی‌صدا ذخیره می‌کند (آینده‌نگر).
+                // از 2026-09-08 چرخشِ توکنِ Refresh رویِ سرور فعال است (ROTATE_
+                // REFRESH_TOKENS=True): هر تمدید، توکنِ Refreshِ تازه هم برمی‌گرداند
+                // و قبلی باطل می‌شود؛ این سطر توکنِ تازه را ذخیره می‌کند تا زنجیره‌ی
+                // تمدید ادامه پیدا کند (اگر ذخیره نشود، نشست بعد از اولین تمدید
+                // تمام می‌شود — چون توکنِ قبلی دیگر قابلِ استفاده نیست).
                 if (data?.refresh) setRefreshToken(data.refresh);
                 return data?.access ?? null;
             } catch {
@@ -306,8 +311,27 @@ const requireAuth = () => {
     }
 };
 
-// خروج از حساب: پاک‌کردنِ توکن/نام کاربری از مرورگر و بازگشت به صفحه‌ی ورود
-const logout = () => {
+// خروج از حساب (از 2026-09-08 سرور-محور): اول توکنِ Refresh با POST به
+// /api/auth/logout/ رویِ سرور باطل می‌شود (لیستِ سیاه)، بعد داده‌های نشست از
+// مرورگر پاک و کاربر به صفحه‌ی ورود برمی‌گردد. به این ترتیب حتی اگر کسی
+// به localStorageِ دستگاهِ قدیمی دسترسی پیدا کند، توکنِ خروج‌شده دیگر
+// قابلِ تمدید نیست (قبل از این تغییر، توکن تا پایانِ عمرش معتبر می‌ماند).
+const logout = async () => {
+    const refreshToken = getRefreshToken();
+    if (refreshToken) {
+        try {
+            // skipAuth: این درخواست هدرِ Authorization نمی‌خواهد (خودِ توکنِ
+            // Refresh اثباتِ هویت است) و نباید واردِ منطقِ ۴۰۱/تمدید شود.
+            await apiPost(
+                endpoints.logout,
+                { refresh: refreshToken },
+                { skipAuth: true },
+            );
+        } catch {
+            // اگر سرور در دسترس نبود، خروجِ محلی همچنان انجام می‌شود؛ کاربر
+            // نباید به‌خاطرِ قطعیِ سرور در حسابِ باز بماند. عمداً نادیده.
+        }
+    }
     clearToken();
     clearRefreshToken();
     clearStoredUsername();

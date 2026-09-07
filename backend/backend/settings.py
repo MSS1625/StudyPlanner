@@ -90,6 +90,11 @@ INSTALLED_APPS = [
     # کتابخانه‌های شخص‌ثالثی که با pip نصب شده‌اند (در requirements.txt هم هستند)
     'rest_framework',            # فریم‌ورک ساختِ API (سریالایزر، ویوست و...)
     'rest_framework_simplejwt',  # احراز هویت مبتنی بر JWT
+    # اپِ «لیستِ سیاهِ توکن‌ها»یِ SimpleJWT (از 2026-09-08): دو جدولِ
+    # OutstandingToken (توکن‌های صادرشده) و BlacklistedToken (توکن‌های باطل‌شده)
+    # را به دیتابیس اضافه می‌کند؛ لازمه‌ی چرخش/ابطالِ توکنِ Refresh است
+    # (مایگریشن‌هایش داخلِ خودِ کتابخانه است؛ فقط یک‌بار migrate لازم دارد).
+    'rest_framework_simplejwt.token_blacklist',
     'corsheaders',               # مدیریت هدرهای CORS
 
     # local apps
@@ -236,9 +241,15 @@ SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(days=1),
     # توکنِ «تمدید» که برای گرفتنِ توکنِ دسترسیِ تازه استفاده می‌شود، ۷ روز اعتبار دارد
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
-    # اگر True بود، هر بار تمدید یک توکنِ Refresh تازه هم صادر می‌شد (فعلاً غیرفعال است)
-    'ROTATE_REFRESH_TOKENS': False,
-    'BLACKLIST_AFTER_ROTATION': False,
+    # چرخشِ توکنِ Refresh (از 2026-09-08): هر تمدید، علاوه بر توکنِ دسترسیِ
+    # تازه، یک توکنِ Refreshِ تازه هم صادر می‌کند؛ فرانت‌اند آن را ذخیره
+    # می‌کند (تابعِ refreshAccessToken در app.js از قبل آماده بود).
+    'ROTATE_REFRESH_TOKENS': True,
+    # توکنِ Refreshِ «قبلی» بلافاصله بعد از چرخش باطل می‌شود (لیستِ سیاه)؛
+    # یعنی هر توکنِ تمدید فقط یک‌بار قابلِ استفاده است — توکنِ دزدیده‌شده
+    # با اولین تمدیدِ مالکِ واقعی، بی‌اعتبار می‌شود. خروجِ سرور-محور هم
+    # (POST /api/auth/logout/) با همین سازوکار توکن را باطل می‌کند.
+    'BLACKLIST_AFTER_ROTATION': True,
     # یعنی هدر باید به‌شکلِ Authorization: Bearer <token> فرستاده شود
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
