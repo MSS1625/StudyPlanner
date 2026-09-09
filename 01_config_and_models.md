@@ -169,41 +169,48 @@ User (مدل آماده‌ی جنگو)
 - `hours_deducted` (از 2026-09-03، Migrationِ `0007`): عددِ دقیقی که در لحظه‌ی ثبت از امتحانِ مربوطه کم شده است (کمینه‌ی `hours_studied` و ساعتِ موجودِ امتحان)؛ مبنای بازگرداندنِ ساعت در متدِ `delete()`. برای گزارش‌های قدیمی، Backfill خودِ Migration با «کلِ ساعتِ ثبت‌شده» پرش کرده است.
 - `notes`: یادداشتِ اختیاری.
 
-**مهم‌ترین بخشِ این کلاس، دو متدِ Override شده است: `save()` و (از 2026-09-03) `delete()`:**
+**مهم‌ترین بخشِ این کلاس، دو متدِ Override شده است: `save()` و (از 2026-09-03) `delete()`** — از 2026-09-09 هر دو، سطرِ امتحان را داخلِ تراکنش با `select_for_update()` قفل و «تازه» می‌خوانند:
 
 ```python
 def save(self, *args, **kwargs):
     is_new = self.pk is None
-    if is_new:
-        # عددِ دقیقِ کسرشده، «قبل» از INSERT (کمینه‌ی ساعتِ مطالعه و ساعتِ موجود)
-        if self.exam.study_hours_remaining > 0:
-            self.hours_deducted = min(
-                self.hours_studied, self.exam.study_hours_remaining
-            )
-        else:
-            self.hours_deducted = 0.0
-
     with transaction.atomic():
+        locked_exam = None
+        if is_new:
+            # قفل و «خواندنِ تازه»ی سطرِ امتحان — مبنایِ کسر، مقدارِ لحظه‌ایِ DB است
+            locked_exam = Exam.objects.select_for_update().get(pk=self.exam_id)
+            if locked_exam.study_hours_remaining > 0:
+                self.hours_deducted = min(
+                    self.hours_studied, locked_exam.study_hours_remaining
+                )
+            else:
+                self.hours_deducted = 0.0
+
         super().save(*args, **kwargs)
         if is_new and self.hours_deducted > 0:
-            self.exam.study_hours_remaining -= self.hours_deducted
-            if self.exam.study_hours_remaining < 0:  # محافظِ گردکردنِ اعشار
-                self.exam.study_hours_remaining = 0
-            self.exam.save()
+            locked_exam.study_hours_remaining -= self.hours_deducted
+            if locked_exam.study_hours_remaining < 0:  # محافظِ گردکردنِ اعشار
+                locked_exam.study_hours_remaining = 0
+            locked_exam.save()
 
 def delete(self, *args, **kwargs):
-    exam = getattr(self, 'exam', None)
     refund = self.hours_deducted or 0.0
     with transaction.atomic():
+        locked_exam = None
+        if self.exam_id is not None and refund > 0:
+            try:
+                locked_exam = Exam.objects.select_for_update().get(pk=self.exam_id)
+            except Exam.DoesNotExist:  # گزارشِ یتیم: فقط خودش حذف می‌شود
+                locked_exam = None
         super().delete(*args, **kwargs)
-        if exam is not None and refund > 0:
-            exam.study_hours_remaining += refund
-            exam.save()
+        if locked_exam is not None:
+            locked_exam.study_hours_remaining += refund
+            locked_exam.save()
 ```
 
 توضیح دقیق:
-1. `save()` ابتدا بررسی می‌کند رکورد **جدید** است یا **ویرایش** (`self.pk is None`)؛ عددِ کسرشده (کمینه‌ی ساعتِ مطالعه و ساعتِ موجودِ امتحان) «قبل» از ذخیره محاسبه می‌شود تا همراهِ همان INSERT در دیتابیس بنشیند؛ سپس داخلِ یک تراکنشِ اتمیک، خودِ گزارش ذخیره و ساعتِ امتحان کم می‌شود (یا هر دو، یا هیچ‌کدام).
-2. `delete()` قرینه‌ی آن است: مبلغِ بازگشتی همان `hours_deducted` است، نه `hours_studied` — این تفاوت در حالتِ «کسرِ محدود» حیاتی است: اگر ۲ ساعت مانده بوده و کاربر ۵ ساعت ثبت کرده باشد، فقط ۲ ساعت کسر شده و حذفِ گزارش هم دقیقاً ۲ ساعت برمی‌گرداند (وگرنه ساعتِ امتحان از مقدارِ اولیه‌اش بیشتر می‌شد).
+1. `save()` ابتدا بررسی می‌کند رکورد **جدید** است یا **ویرایش** (`self.pk is None`)؛ برای رکوردِ جدید، سطرِ امتحان داخلِ همان تراکنش با `select_for_update()` قفل و «تازه» خوانده می‌شود (از 2026-09-09) و عددِ کسرشده (کمینه‌ی ساعتِ مطالعه و «مقدارِ لحظه‌ایِ» ساعتِ موجودِ امتحان در دیتابیس — نه snapshotِ حافظه) محاسبه می‌شود تا همراهِ همان INSERT در دیتابیس بنشیند؛ سپس داخلِ همان تراکنشِ اتمیک، خودِ گزارش ذخیره و ساعتِ همان نمونه‌یِ قفل‌شده کم می‌شود (یا هر دو، یا هیچ‌کدام).
+2. `delete()` قرینه‌ی آن است: مبلغِ بازگشتی همان `hours_deducted` است، نه `hours_studied` — این تفاوت در حالتِ «کسرِ محدود» حیاتی است: اگر ۲ ساعت مانده بوده و کاربر ۵ ساعت ثبت کرده باشد، فقط ۲ ساعت کسر شده و حذفِ گزارش هم دقیقاً ۲ ساعت برمی‌گرداند (وگرنه ساعتِ امتحان از مقدارِ اولیه‌اش بیشتر می‌شد). بازگشت هم رویِ سطرِ قفل‌شده و تازه‌خوانده‌شده جمع می‌شود (ترتیبِ قفل مثلِ save: اول امتحان)؛ اگر امتحان دیگر موجود نباشد (گزارشِ یتیم)، فقط خودِ گزارش حذف می‌شود.
 3. شرطِ محافظتیِ `if < 0: = 0` فقط خطاهای گردکردنِ اعدادِ اعشاری را می‌گیرد؛ خودِ `min` تضمینِ اصلیِ نامنفی‌بودن است.
 4. نکته‌ی حذفِ آبشاری: مسیرِ BulkDeleteِ سریعِ جنگو (حذفِ خودِ امتحان، حذفِ دسته‌ایِ QuerySet) این متدها را صدا نمی‌زند — که درست هم هست، چون در حذفِ امتحان، دیگر امتحانی نمی‌ماند که ساعتی به آن برگردد.
 

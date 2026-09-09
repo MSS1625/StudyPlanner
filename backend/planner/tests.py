@@ -9,6 +9,8 @@
 #   - SubjectAPITests ......... CRUD درس + یکتاییِ نام + جداسازی کاربران
 #   - ExamAPITests ............ CRUD امتحان + ویرایش (PATCH) + سناریوهای امنیتی
 #   - StudyLogAPITests ........ ثبتِ گزارش + کسرِ ساعتِ امتحان + جداسازی
+#   - StudyLogConcurrencyLockTests  قفلِ select_for_update و خواندنِ تازه در ذخیره/حذفِ گزارش (2026-09-09)
+#   - StudyLogOrphanDeleteTests  حذفِ گزارشِ یتیم (کلیدِ خارجیِ شکسته؛ TransactionTestCase)
 #   - StudyPlanAPITests ....... endpoint برنامه‌ی مطالعه + اعتبارسنجیِ ورودی
 #   - StudyPlanUniqueConstraintTests ‌یکتاییِ StudyPlan.user در سطحِ DB (مایگریشنِ 0008، با TransactionTestCase)
 #   - DashboardAPITests ....... شکلِ پاسخ، شمارش‌ها و انواعِ هشدار
@@ -36,7 +38,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
-from django.db import IntegrityError
+from django.db import IntegrityError, connection
+from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TransactionTestCase
 from rest_framework import status
 from rest_framework.test import APIClient, APITestCase
@@ -822,6 +825,164 @@ class StudyLogAPITests(BaseAPITestCase):
         self.exam.delete()  # حذفِ آبشاری: گزارش‌ها هم باید حذف شوند
         self.assertFalse(StudyLog.objects.exists())
         self.assertFalse(Exam.objects.filter(pk=self.exam.pk).exists())
+
+
+# ---------------------------------------------------------------------------
+# ۴-ب) قفلِ هم‌زمانیِ گزارشِ مطالعه (select_for_update) — 2026-09-09
+# ---------------------------------------------------------------------------
+
+class StudyLogConcurrencyLockTests(BaseAPITestCase):
+    """
+    قفلِ هم‌زمانیِ StudyLog.save()/delete() (آیتمِ Lowِ TODO، 2026-09-09):
+    سطرِ امتحان پیش از کسر/بازگشتِ ساعت با select_for_update() قفل و
+    «تازه» خوانده می‌شود؛ پس مبنایِ محاسبه، مقدارِ لحظه‌ایِ دیتابیس است نه
+    snapshotِ حافظه — و Lost Update ممکن نیست (دو تستِ اول رفتارِ قدیمی را
+    قطعی‌آور شکست می‌دهند؛ بقیه قفل‌بودنِ مسیر و رفتارهایِ حاشیه‌ای را
+    تضمین می‌کنند).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.subject = self.create_subject(self.alice, 'فیزیک')
+        self.exam = self.create_exam(self.subject, hours=5)
+
+    def _spy_on_queryset_get(self, calls):
+        """
+        جاسوس روی QuerySet.get: هر خواندنِ امتحان را همراهِ این‌که کوئری‌اش
+        select_for_update داشت یا نه ثبت می‌کند — راهِ قطعی‌آورِ اثباتِ
+        قفل‌بودنِ مسیر در SQLite (که FOR UPDATE را بی‌صدا نادیده می‌گیرد و
+        در SQL دیده نمی‌شود).
+        """
+        original_get = QuerySet.get
+
+        def spy_get(self_qs, *args, **kwargs):
+            calls.append(
+                bool(getattr(self_qs.query, 'select_for_update', False))
+            )
+            return original_get(self_qs, *args, **kwargs)
+
+        return patch('django.db.models.query.QuerySet.get', spy_get)
+
+    def test_save_deducts_from_fresh_db_value_not_stale_instance(self):
+        """رگرسیونِ Lost Update (رفعِ 2026-09-09): مبنایِ کسر، مقدارِ تازه‌ی
+        دیتابیس است نه snapshotِ حافظه. امتحان ۵ ساعته → گزارشِ اول ۳ ساعت
+        می‌گیرد (باقی‌مانده: ۲)؛ گزارشِ دوم که در حافظه به کپیِ قدیمیِ
+        ۵ ساعته اشاره می‌کند ۴ ساعت ثبت می‌کند. کدِ درست: فقط ۲ ساعت
+        (باقی‌مانده‌یِ واقعی) کسر و حاصل صفر می‌شود؛ کدِ قدیمی با مبنایِ
+        کهنه ۴ ساعت کسر و عددِ ۱ را می‌نوشت (کسرِ گزارشِ اول له می‌شد)."""
+        stale_exam = Exam.objects.get(pk=self.exam.pk)  # snapshot: ۵ ساعت
+        StudyLog.objects.create(user=self.alice, exam=self.exam, hours_studied=3)
+        self.exam.refresh_from_db()
+        self.assertEqual(self.exam.study_hours_remaining, 2)  # 5 - 3
+
+        # گزارشِ دوم با مرجعِ کهنه (در حافظه هنوز ۵ ساعت می‌بیند):
+        second_log = StudyLog(user=self.alice, exam=stale_exam, hours_studied=4)
+        second_log.save()
+
+        self.exam.refresh_from_db()
+        self.assertEqual(self.exam.study_hours_remaining, 0)  # نه ۱ (کدِ قدیمی)
+        self.assertEqual(second_log.hours_deducted, 2)  # فقط باقی‌مانده‌یِ واقعی
+
+        # بازگشتِ دقیق: حذفِ گزارشِ دوم فقط همان ۲ ساعتِ واقعاً کسرشده را
+        # برمی‌گرداند (کدِ قدیمی ۴ ساعت «از هیچ» می‌ساخت).
+        second_log.delete()
+        self.exam.refresh_from_db()
+        self.assertEqual(self.exam.study_hours_remaining, 2)
+
+    def test_delete_refunds_into_fresh_db_value(self):
+        """قرینه‌یِ تستِ بالا در delete(): بازگشتِ ساعت رویِ مقدارِ لحظه‌ایِ
+        دیتابیس جمع می‌شود، نه رویِ کپیِ کش‌شده‌یِ ابتدایِ درخواست. بعد از
+        گزارشِ ۳ ساعته (باقی‌مانده: ۲)، به‌روزرسانیِ هم‌زمانِ باقی‌مانده را
+        به ۱۰ می‌برد؛ حذفِ گزارش باید ۱۳ بگذارد (کدِ قدیمی با snapshotِ
+        کهنه ۵ می‌نوشت و به‌روزرسانیِ هم‌زمان را له می‌کرد)."""
+        log = StudyLog.objects.create(user=self.alice, exam=self.exam, hours_studied=3)
+        self.exam.refresh_from_db()
+        self.assertEqual(self.exam.study_hours_remaining, 2)
+
+        # گزارش با examِ کش‌شده (مثلِ select_relatedِ ابتدایِ درخواست):
+        log = StudyLog.objects.select_related('exam').get(pk=log.pk)
+        # به‌روزرسانیِ هم‌زمان (مستقل از نمونه‌هایِ در حافظه):
+        Exam.objects.filter(pk=self.exam.pk).update(study_hours_remaining=10)
+
+        log.delete()
+        self.exam.refresh_from_db()
+        self.assertEqual(self.exam.study_hours_remaining, 13)  # 10 + 3
+
+    def test_save_locks_exam_row_with_select_for_update(self):
+        """مسیرِ save() باید امتحان را با کوئریِ select_for_update بخواند
+        (در SQLite در SQL ظاهر نمی‌شود؛ پرچمِ کوئری را با جاسوس چک می‌کنیم)."""
+        calls = []
+        with self._spy_on_queryset_get(calls):
+            StudyLog.objects.create(user=self.alice, exam=self.exam, hours_studied=1)
+        self.assertIn(True, calls)  # حداقل یک خواندنِ قفل‌شده
+
+    def test_delete_locks_exam_row_with_select_for_update(self):
+        """مسیرِ delete() (با بازگشتِ ساعت) هم امتحان را قفل می‌کند."""
+        log = StudyLog.objects.create(user=self.alice, exam=self.exam, hours_studied=2)
+        calls = []
+        with self._spy_on_queryset_get(calls):
+            log.delete()
+        self.assertIn(True, calls)
+
+    def test_edit_log_skips_lock_and_deduction(self):
+        """ویرایشِ گزارش (pk دارد) نه قفل می‌گیرد (اتلاف نداریم) و نه دوباره
+        ساعت کسر می‌کند — دست‌نخوردگیِ رفتارِ قبلی."""
+        log = StudyLog.objects.create(user=self.alice, exam=self.exam, hours_studied=2)
+        self.exam.refresh_from_db()
+        self.assertEqual(self.exam.study_hours_remaining, 3)  # 5 - 2
+
+        log.hours_studied = 5  # ویرایش
+        calls = []
+        with self._spy_on_queryset_get(calls):
+            log.save()
+
+        self.assertNotIn(True, calls)  # بدونِ قفل
+        self.exam.refresh_from_db()
+        self.assertEqual(self.exam.study_hours_remaining, 3)  # بدونِ کسرِ مجدد
+        log.refresh_from_db()
+        self.assertEqual(log.hours_studied, 5)
+        self.assertEqual(log.hours_deducted, 2)  # کسرِ اصلی دست‌نخورده
+
+    def test_save_with_deleted_exam_fails_cleanly(self):
+        """اگر امتحانِ گزارشِ تازه قبل از ذخیره حذف شده باشد: خطایِ روشنِ
+        DoesNotExist (نه رکوردِ یتیمِ نیمه‌کاره) و هیچ گزارشی ذخیره نمی‌شود."""
+        log = StudyLog(user=self.alice, exam=self.exam, hours_studied=1)
+        self.exam.delete()
+        with self.assertRaises(Exam.DoesNotExist):
+            log.save()
+        self.assertFalse(StudyLog.objects.exists())
+
+
+class StudyLogOrphanDeleteTests(TransactionTestCase):
+    """
+    حذفِ مستقیمِ گزارشِ «یتیم» (کلیدِ خارجیِ شکسته) — رفتارِ defensive:
+    فقط خودِ گزارش حذف می‌شود، بدونِ خطا و بدونِ زنده‌کردنِ امتحانِ حذف‌شده.
+    (TransactionTestCase لازم است چون ساختِ یتیمِ واقعی فقط بیرونِ تراکنشِ
+    تست و با خاموش‌کردنِ موقتِ کلیدِ خارجیِ SQLite ممکن است.)
+    """
+
+    def test_delete_orphan_log_just_deletes_without_refund(self):
+        user = User.objects.create_user(username='carol', password='pw-12345678')
+        subject = Subject.objects.create(user=user, name='شیمی', difficulty=3)
+        exam = Exam.objects.create(
+            subject=subject,
+            exam_date=date.today() + timedelta(days=10),
+            study_hours_remaining=5,
+            chapters_remaining=3,
+        )
+        log = StudyLog.objects.create(user=user, exam=exam, hours_studied=2)
+
+        # شبیه‌سازیِ کلیدِ خارجیِ شکسته: حذفِ خامِ سطرِ امتحان (بدونِ آبشار)
+        with connection.cursor() as cursor:
+            cursor.execute('PRAGMA foreign_keys = OFF')
+            cursor.execute('DELETE FROM planner_exam WHERE id = %s', [exam.pk])
+            cursor.execute('PRAGMA foreign_keys = ON')
+        self.assertTrue(StudyLog.objects.filter(pk=log.pk).exists())  # یتیم ماند
+
+        log.delete()  # نباید خطا بدهد و نباید امتحان را «زنده» کند
+
+        self.assertFalse(StudyLog.objects.filter(pk=log.pk).exists())
+        self.assertFalse(Exam.objects.filter(pk=exam.pk).exists())  # نه resurrection
 
 
 # ---------------------------------------------------------------------------
