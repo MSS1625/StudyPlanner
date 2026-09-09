@@ -53,4 +53,9 @@ urlpatterns = [
     # این ویو هم مثلِ refresh بدونِ هدرِ Authorization در دسترس است.
     path('auth/logout/', TokenBlacklistView.as_view(), name='token_blacklist'),
     path('dashboard/', views.dashboard, name='dashboard'),
+    # پیش‌بینیِ هوشمند (از 2026-09-09): GET /api/predictions/ — مؤلفه‌ی
+    # یادگیریِ آماری (کالیبراسیونِ تخمین‌هایِ ساعتیِ کاربر رویِ تاریخچه‌ی
+    # StudyLogها + ریسکِ عقب‌افتادن برایِ امتحان‌هایِ آینده). مثلِ dashboard
+    # فقط با لاگین در دسترس است و رشته‌هایش ماشین‌خوانند (ترجمه در فرانت‌اند).
+    path('predictions/', views.predictions, name='predictions'),
 ]

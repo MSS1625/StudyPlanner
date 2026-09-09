@@ -21,6 +21,9 @@
 #   - PostgresForUpdateTests ... رگرسیونِ FOR UPDATE در SQL — فقط وقتی موتورِ فعال PostgreSQL است
 #   - I18nAcceptLanguageTests . ترجمه‌ی پیام‌هایِ API با هدرِ Accept-Language (2026-09-09)
 #   - I18nCatalogIntegrityTests  سلامتِ کاتالوگِ locale/en + تنظیماتِ چندزبانی (2026-09-09)
+#   - MLCalibrationMathTests . ریاضیاتِ خالصِ مدلِ کالیبراسیون (LSQ از مبدأ + انقباض + مهار) (2026-09-09)
+#   - MLTrainingDataTests ... ساختِ نمونه‌هایِ (planned, actual) از تاریخچه‌ی StudyLog (2026-09-09)
+#   - MLPredictionsAPITests .. GET /api/predictions/ — مدل + پیش‌بینی‌ها + ریسک + جداسازیِ کاربر (2026-09-09)
 #
 # اجرا (از پوشه‌ی backend):
 #   python manage.py test planner -v 2
@@ -61,6 +64,18 @@ from .utils import (
     generate_study_plan,
     format_plan_for_frontend,
     build_subject_distribution,
+)
+from .ml import (
+    fit_calibration_model,
+    classify_bias,
+    predict_hours,
+    assess_exam_risk,
+    build_training_samples,
+    get_prediction_report,
+    PRIOR_STRENGTH,
+    FACTOR_MIN,
+    FACTOR_MAX,
+    BIAS_TOLERANCE,
 )
 
 
@@ -2006,3 +2021,394 @@ class I18nCatalogIntegrityTests(SimpleTestCase):
         common = mw.index('django.middleware.common.CommonMiddleware')
         self.assertLess(session, locale_mw)
         self.assertLess(locale_mw, common)
+
+
+# ---------------------------------------------------------------------------
+# ۱۸) مؤلفه‌ی یادگیریِ آماری — ریاضیاتِ خالصِ مدل (planner/ml.py)
+# ---------------------------------------------------------------------------
+
+class MLCalibrationMathTests(SimpleTestCase):
+    """
+    تستِ واحدِ توابعِ خالصِ planner/ml.py — بدونِ دیتابیس، بدونِ ORM؛
+    فقط ریاضیاتِ «کالیبراسیونِ تخمینِ ساعتیِ کاربر»:
+
+    - رگرسیونِ کمینه‌ی مربعاتِ از مبدأ: β = Σxy / Σx² (خالی، دقیق)
+    - انقباضِ بیزی به‌سمتِ ۱ (PRIOR_STRENGTH نمونه‌ی فرضیِ خنثی)
+    - مهارِ نهاییِ β در بازه‌ی [FACTOR_MIN, FACTOR_MAX]
+    - برچسبِ سوگیری، سنجشِ ریسک و اعمالِ β در پیش‌بینی
+    """
+
+    def test_exact_least_squares_slope_and_shrinkage(self):
+        """β خامِ LSQ از مبدأ + انقباض — اعدادِ دستیِ قابل‌ردیابی.
+
+        نمونه‌ها: (2,3), (4,5), (6,9) → Σxy=80 و Σx²=56 → β=1.4286؛
+        با n=3 و پیشینِ ۴: β_eff = (3×1.4286 + 4) / 7 = 1.1837؛
+        اعتماد = 3/7 = 0.4286.
+        """
+        model = fit_calibration_model([
+            {'planned': 2, 'actual': 3},
+            {'planned': 4, 'actual': 5},
+            {'planned': 6, 'actual': 9},
+        ])
+        self.assertEqual(model['status'], 'ok')
+        self.assertAlmostEqual(model['raw_factor'], 80 / 56, places=4)
+        self.assertAlmostEqual(model['calibration_factor'], (3 * (80 / 56) + 4) / 7, places=4)
+        self.assertAlmostEqual(model['confidence'], 3 / 7, places=4)
+        self.assertEqual(model['sample_count'], 3)
+
+    def test_empty_samples_trust_manual_estimate(self):
+        """بدونِ تاریخچه: مدلِ «بی‌طرف» — β=۱ یعنی تخمینِ دستی بدونِ تغییر."""
+        model = fit_calibration_model([])
+        self.assertEqual(model['status'], 'no_history')
+        self.assertIsNone(model['raw_factor'])
+        self.assertEqual(model['calibration_factor'], 1.0)
+        self.assertEqual(model['sample_count'], 0)
+        self.assertEqual(model['confidence'], 0.0)
+        self.assertEqual(model['bias'], 'unknown')
+
+    def test_invalid_planned_samples_are_ignored(self):
+        """نمونه‌هایِ planned نامعتبر (۰) کنار می‌روند ولی نمونه‌ی معتبر می‌ماند.
+
+        (0,5) و (0,3) هیچ اطلاعاتی درباره‌ی «نسبتِ واقعیت به تخمین» نمی‌دهند؛
+        (4,6) باید به‌تنهایی مدل را بسازد: β=1.5 → β_eff=(1×1.5+4)/5=1.1
+        """
+        model = fit_calibration_model([
+            {'planned': 0, 'actual': 5},
+            {'planned': 0, 'actual': 3},
+            {'planned': 4, 'actual': 6},
+        ])
+        self.assertEqual(model['status'], 'ok')
+        self.assertEqual(model['sample_count'], 1)
+        self.assertAlmostEqual(model['raw_factor'], 1.5, places=4)
+        self.assertAlmostEqual(model['calibration_factor'], 1.1, places=4)
+
+    def test_shrinkage_damps_small_sample_extremes(self):
+        """یک نمونه‌ی افراطی (β خام=۱۰) نباید مدل را افراطی کند.
+
+        n=1 و پیشینِ ۴ → β_eff = (10+4)/5 = 2.8 — دامپ‌شده ولی جهتِ سوگیری
+        حفظ شده (کاربر دست‌کم می‌گیرد).
+        """
+        model = fit_calibration_model([{'planned': 1, 'actual': 10}])
+        self.assertEqual(model['status'], 'ok')
+        self.assertAlmostEqual(model['raw_factor'], 10.0, places=4)
+        self.assertAlmostEqual(model['calibration_factor'], 2.8, places=4)
+        self.assertAlmostEqual(model['confidence'], 0.2, places=4)
+        self.assertEqual(model['bias'], 'underestimates')
+        self.assertLess(model['calibration_factor'], model['raw_factor'])
+
+    def test_clamping_upper_bound(self):
+        """داده‌ی خراب/آزمایشی (۱۰ نمونه‌ی β=۱۰۰) → مهار در سقفِ FACTOR_MAX."""
+        samples = [{'planned': 1, 'actual': 100}] * 10
+        model = fit_calibration_model(samples)
+        self.assertAlmostEqual(model['raw_factor'], 100.0, places=4)
+        self.assertEqual(model['calibration_factor'], FACTOR_MAX)
+
+    def test_clamping_lower_bound(self):
+        """بیست نمونه‌ی «هیچ مطالعه‌ای نشد» (β خام=۰) → مهار در کفِ FACTOR_MIN."""
+        samples = [{'planned': 10, 'actual': 0}] * 20
+        model = fit_calibration_model(samples)
+        self.assertAlmostEqual(model['raw_factor'], 0.0, places=4)
+        self.assertEqual(model['calibration_factor'], FACTOR_MIN)
+
+    def test_bias_classification_thresholds(self):
+        """برچسبِ سوگیری با تلورانسِ ±۱۵٪: دقیق / دست‌کم‌گیر / زیادرو."""
+        self.assertEqual(classify_bias(1.2), 'underestimates')
+        self.assertEqual(classify_bias(0.8), 'overestimates')
+        self.assertEqual(classify_bias(1.07), 'accurate')
+        self.assertEqual(classify_bias(0.9), 'accurate')
+        self.assertEqual(classify_bias(None), 'unknown')
+        # مرزهای دقیقِ تلورانس (تستِ ثابت‌ها برای جلوگیری از تغییرِ ناخواسته)
+        self.assertEqual(classify_bias(1 + BIAS_TOLERANCE + 0.001), 'underestimates')
+        self.assertEqual(classify_bias(1 - BIAS_TOLERANCE - 0.001), 'overestimates')
+
+    def test_assess_risk_thresholds(self):
+        """ریسک نسبتِ نیازِ روزانه به ساعتِ آزادِ روزانه (با مرزها)."""
+        # نیاز روزانه = 10/5 = 2.0 == کلِ ساعتِ آزاد → حتی ۱۰۰٪ وقت کافی نیست
+        self.assertEqual(assess_exam_risk(10.0, 5, 2.0)['risk'], 'high')
+        # 8/5 = 1.6 → بینِ ۷۵٪ (1.5) و ۱۰۰٪ (2.0) → تنگ
+        self.assertEqual(assess_exam_risk(8.0, 5, 2.0)['risk'], 'medium')
+        # 5/5 = 1.0 → راحت
+        self.assertEqual(assess_exam_risk(5.0, 5, 2.0)['risk'], 'low')
+        # امتحانِ امروز (days_left=0): برای ریاضیات یک روز فرض می‌شود
+        result = assess_exam_risk(10.0, 0, 5.0)
+        self.assertEqual(result['risk'], 'high')
+        self.assertEqual(result['required_daily_hours'], 10.0)
+        # بدونِ ساعتِ پیش‌بینی‌شده → خطا/ریسکی نیست
+        self.assertEqual(assess_exam_risk(0.0, 5, 2.0), {'risk': 'low', 'required_daily_hours': 0.0})
+        # گردشدنِ نیازِ روزانه به دو رقمِ اعشار
+        self.assertEqual(assess_exam_risk(10.0, 3, 10.0)['required_daily_hours'], 3.33)
+
+    def test_predict_hours_applies_calibration(self):
+        """پیش‌بینی = β نهایی × ساعتِ اعلام‌شده (گرد به یک رقمِ اعشار).
+
+        دو نمونه‌ی (4,8): β=2 خام → β_eff=4/3 → predict(6) = 8.0؛
+        و مدلِ بی‌تاریخچه همان مقدارِ اعلام‌شده را برمی‌گرداند (β=1).
+        """
+        learned = fit_calibration_model([
+            {'planned': 4, 'actual': 8},
+            {'planned': 4, 'actual': 8},
+        ])
+        self.assertAlmostEqual(learned['calibration_factor'], 4 / 3, places=4)
+        self.assertEqual(predict_hours(learned, 6.0), 8.0)
+
+        neutral = fit_calibration_model([])
+        self.assertEqual(predict_hours(neutral, 6.0), 6.0)
+
+
+# ---------------------------------------------------------------------------
+# ۱۹) مؤلفه‌ی ML — ساختِ نمونه‌هایِ آموزشی از تاریخچه‌ی StudyLog
+# ---------------------------------------------------------------------------
+
+class MLTrainingDataTests(BaseAPITestCase):
+    """
+    آزمونِ «استخراجِ داده» — پلِ بینِ ORM و مدلِ خالص:
+
+    - فقط امتحان‌هایِ «تمام‌شده» (تاریخِ گذشته + حداقل یک گزارش) نمونه می‌شوند
+    - planned = باقی‌مانده‌ی فعلی + جمعِ hours_deducted (بازسازیِ تخمینِ اولیه)
+    - actual = جمعِ hours_studied (مطالعه‌ی فراتر از طرح = سیگنالِ دست‌کم‌گیری)
+    - مرزِ «امروز»: در آموزش نیست (جلوگیری از نشتِ آینده) ولی در پیش‌بینی هست
+    - جداسازیِ کاربران
+    """
+
+    def test_only_past_exams_with_logs_become_samples(self):
+        """امتحانِ آینده (حتی با گزارش) و امتحانِ گذشتهِ بی‌گزارش، آموزش نیستند."""
+        subject = self.create_subject(self.alice, 'ریاضی')
+        # گذشته + گزارش → نمونه می‌شود
+        past = self.create_exam(subject, days_ahead=-10, hours=10)
+        StudyLog.objects.create(user=self.alice, exam=past, hours_studied=2.5)
+        # آینده + گزارش → نباید در آموزش باشد (داده‌ی آینده به گذشته نشت نکند)
+        future = self.create_exam(subject, days_ahead=10, hours=10)
+        StudyLog.objects.create(user=self.alice, exam=future, hours_studied=3)
+        # گذشته بدونِ گزارش → چیزی برای یادگیری ندارد
+        self.create_exam(subject, days_ahead=-15, hours=8)
+
+        samples = build_training_samples(self.alice)
+        self.assertEqual(len(samples), 1)
+        self.assertEqual(samples[0], {'planned': 10.0, 'actual': 2.5})
+
+    def test_planned_is_reconstructed_from_deductions(self):
+        """بازسازیِ تخمینِ اولیه: باقی‌مانده + جمعِ کسرشده‌ها.
+
+        امتحانِ ۱۰ ساعته + دو گزارشِ ۲ و ۳ ساعته → باقی‌مانده ۵، کسرشده ۵ →
+        planned=10 (همان تخمینِ اولیه) و actual=5.
+        """
+        subject = self.create_subject(self.alice, 'فیزیک')
+        exam = self.create_exam(subject, days_ahead=-10, hours=10)
+        StudyLog.objects.create(user=self.alice, exam=exam, hours_studied=2)
+        StudyLog.objects.create(user=self.alice, exam=exam, hours_studied=3)
+
+        exam.refresh_from_db()
+        self.assertEqual(exam.study_hours_remaining, 5)  # کسرِ خودکار در save()
+
+        samples = build_training_samples(self.alice)
+        self.assertEqual(samples, [{'planned': 10.0, 'actual': 5.0}])
+
+    def test_zero_planned_exam_is_skipped(self):
+        """امتحانی که از اول ۰ ساعتِ باقی‌مانده داشت، چیزی به کالیبراسیون نمی‌گوید
+        (کسر هم از صفر اتفاق نیفتاده — planned بازسازی‌شده صفر می‌ماند)."""
+        subject = self.create_subject(self.alice, 'شیمی')
+        exam = self.create_exam(subject, days_ahead=-10, hours=0)
+        StudyLog.objects.create(user=self.alice, exam=exam, hours_studied=3)
+
+        samples = build_training_samples(self.alice)
+        self.assertEqual(samples, [])
+
+    def test_today_is_not_past_but_counts_as_upcoming(self):
+        """مرزِ «امروز»: در آموزش نیست ولی در پیش‌بینی هست (قرینه‌ی گتِ dashboard)."""
+        subject = self.create_subject(self.alice, 'ادبیات')
+        today_exam = self.create_exam(subject, days_ahead=0, hours=6)
+        StudyLog.objects.create(user=self.alice, exam=today_exam, hours_studied=2)
+
+        # آموزش: تاریخِ «امروز» هنوز تمام‌نشده محسوب می‌شود (strict less-than)
+        self.assertEqual(build_training_samples(self.alice), [])
+
+        # پیش‌بینی: امتحانِ امروز جزوِ آینده است؛ بدونِ تاریخچه β=۱
+        # (گزارشِ ۲ ساعته‌ی بالا ۲ ساعت از ۶ ساعتِ باقی‌مانده کسر کرده → ۴)
+        report = get_prediction_report(self.alice, daily_available_hours=2.0)
+        self.assertEqual(len(report['predictions']), 1)
+        item = report['predictions'][0]
+        self.assertEqual(item['days_left'], 0)
+        self.assertEqual(item['planned_hours'], 4.0)
+        self.assertEqual(item['predicted_hours'], 4.0)
+        # نیازِ روزانه با فرضِ «یک روزِ باقی‌مانده»: 4 ≥ 2 → ریسکِ بالا
+        self.assertEqual(item['risk'], 'high')
+
+    def test_users_are_isolated(self):
+        """هر کاربر فقط از تاریخچه‌ی خودش یاد می‌گیرد (قرینه‌ی نکته‌ی ۶.۳)."""
+        alice_subject = self.create_subject(self.alice, 'ریاضیِ آلیس')
+        alice_past = self.create_exam(alice_subject, days_ahead=-10, hours=10)
+        StudyLog.objects.create(user=self.alice, exam=alice_past, hours_studied=2.5)
+
+        bob_subject = self.create_subject(self.bob, 'ریاضیِ باب')
+        bob_past = self.create_exam(bob_subject, days_ahead=-10, hours=4)
+        StudyLog.objects.create(user=self.bob, exam=bob_past, hours_studied=8)
+
+        self.assertEqual(build_training_samples(self.alice), [{'planned': 10.0, 'actual': 2.5}])
+        self.assertEqual(build_training_samples(self.bob), [{'planned': 4.0, 'actual': 8.0}])
+
+
+# ---------------------------------------------------------------------------
+# ۲۰) مؤلفه‌ی ML — GET /api/predictions/
+# ---------------------------------------------------------------------------
+
+class MLPredictionsAPITests(BaseAPITestCase):
+    """
+    رفتارِ endpointِ پیش‌بینی در سطحِ HTTP:
+
+    - فقط با احرازِ هویت (نکته‌ی ۶.۳: داده‌ی هر کاربر فقط مالِ خودش)
+    - کاربرِ تازه‌بی‌خبر: β=۱ (تخمینِ دستی بی‌طرفانه) + ریسکِ حساب‌شده
+    - تاریخچه‌ی دست‌کم‌گیر: β>۱ → پیش‌بینیِ بزرگ‌تر از تخمینِ دستی
+    - فقط امتحان‌هایِ آینده‌ی «فعال» (ساعتِ باقی‌مانده > 0)، مرتب با تاریخ
+    - سطح‌هایِ ریسک نسبت به ساعتِ آزادِ روزانه‌ی همان کاربر (StudyPlan)
+    """
+
+    def test_authentication_required(self):
+        """بدونِ توکن: 401 — مثلِ بقیه‌ی endpointهایِ محافظت‌شده."""
+        response = APIClient().get('/api/predictions/')
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_fresh_user_trusts_manual_estimate(self):
+        """کاربرِ بدونِ تاریخچه: status=no_history و β=۱؛ ریسک از تخمینِ خام."""
+        subject = self.create_subject(self.alice, 'ریاضی')
+        self.create_exam(subject, days_ahead=10, hours=5)
+
+        response = self.client_as(self.alice).get('/api/predictions/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        body = response.json()
+        self.assertEqual(body['model']['status'], 'no_history')
+        self.assertEqual(body['model']['calibration_factor'], 1.0)
+        self.assertEqual(body['model']['sample_count'], 0)
+        self.assertEqual(body['model']['bias'], 'unknown')
+
+        self.assertEqual(len(body['predictions']), 1)
+        item = body['predictions'][0]
+        self.assertEqual(item['subject'], 'ریاضی')
+        self.assertEqual(item['days_left'], 10)
+        self.assertEqual(item['planned_hours'], 5.0)
+        self.assertEqual(item['predicted_hours'], 5.0)
+        # 5 ساعت در 10 روز = 0.5 ساعتِ روزانه؛ پیش‌فرضِ ساعتِ آزاد = 2 → کم‌خطر
+        self.assertEqual(item['required_daily_hours'], 0.5)
+        self.assertEqual(item['risk'], 'low')
+
+        self.assertEqual(body['summary']['exam_count'], 1)
+        self.assertEqual(body['summary']['low_risk'], 1)
+        self.assertEqual(body['summary']['total_predicted_hours'], 5.0)
+
+    def test_calibration_changes_future_prediction(self):
+        """تاریخچه‌ی «دست‌کم‌گیری» → β>۱ → ساعتِ پیش‌بینی‌شده بزرگ‌تر از تخمین.
+
+        دو امتحانِ گذشته‌ی ۴ ساعته که هرکدام ۸ ساعت مطالعه خورته‌اند →
+        β خام=2 و با انقباض β_eff=4/3 → برای امتحانِ آینده‌ی ۶ ساعته:
+        6×4/3 = 8 ساعتِ واقعی.
+        """
+        subject = self.create_subject(self.alice, 'زیست')
+        for _ in range(2):
+            past = self.create_exam(subject, days_ahead=-20, hours=4)
+            StudyLog.objects.create(user=self.alice, exam=past, hours_studied=8)
+
+        future = self.create_exam(subject, days_ahead=9, hours=6)
+
+        response = self.client_as(self.alice).get('/api/predictions/')
+        body = response.json()
+
+        self.assertEqual(body['model']['status'], 'ok')
+        self.assertEqual(body['model']['sample_count'], 2)
+        self.assertAlmostEqual(body['model']['calibration_factor'], 1.33, places=2)
+        self.assertEqual(body['model']['bias'], 'underestimates')
+        self.assertAlmostEqual(body['model']['confidence'], 0.33, places=2)
+
+        item = body['predictions'][0]
+        self.assertEqual(item['exam_id'], future.pk)
+        self.assertEqual(item['planned_hours'], 6.0)
+        self.assertEqual(item['predicted_hours'], 8.0)  # 6 × 4/3
+        self.assertNotEqual(item['predicted_hours'], item['planned_hours'])
+
+    def test_predictions_only_include_active_upcoming_exams(self):
+        """امتحانِ گذشته و امتحانِ تمام‌شده (۰ ساعتِ باقی‌مانده) پیش‌بینی نمی‌شوند؛
+        بقیه مرتب با نزدیک‌ترین تاریخ می‌آیند و شکلِ آیتم‌ها ثابت است."""
+        subject = self.create_subject(self.alice, 'شیمی')
+        # گذشته → فقط مالِ آموزش است
+        past = self.create_exam(subject, days_ahead=-5, hours=10)
+        StudyLog.objects.create(user=self.alice, exam=past, hours_studied=2)
+        # آینده ولی تمام‌شده → هیچ ساعتی برای پیش‌بینی ندارد
+        self.create_exam(subject, days_ahead=15, hours=0)
+        # دو امتحانِ آینده‌ی فعال
+        near = self.create_exam(subject, days_ahead=3, hours=5)
+        far = self.create_exam(subject, days_ahead=8, hours=5)
+
+        response = self.client_as(self.alice).get('/api/predictions/')
+        body = response.json()
+
+        self.assertEqual(len(body['predictions']), 2)
+        self.assertEqual(body['predictions'][0]['exam_id'], near.pk)
+        self.assertEqual(body['predictions'][1]['exam_id'], far.pk)
+        # شکلِ ثابتِ هر آیتم (قرارداد با فرانت‌اند — مثلِ dashboard)
+        for item in body['predictions']:
+            self.assertEqual(
+                set(item.keys()),
+                {'exam_id', 'subject', 'exam_date', 'days_left', 'planned_hours',
+                 'predicted_hours', 'required_daily_hours', 'risk'},
+            )
+
+    def test_risk_levels_from_daily_available_hours(self):
+        """سه سطحِ ریسک با ساعتِ آزادِ پیش‌فرضِ ۲ (ساختِ خودکارِ تنظیمات).
+
+        نیازِ روزانه: 10/5=2.0 ≥ 2 → بالا؛ 8/5=1.6 → متوسط؛ 5/5=1.0 → کم.
+        """
+        subject = self.create_subject(self.alice, 'حسابان')
+        self.create_exam(subject, days_ahead=5, hours=10)  # required = 2.0
+        self.create_exam(subject, days_ahead=5, hours=8)   # required = 1.6
+        self.create_exam(subject, days_ahead=5, hours=5)   # required = 1.0
+
+        response = self.client_as(self.alice).get('/api/predictions/')
+        body = response.json()
+
+        risks = [item['risk'] for item in body['predictions']]
+        self.assertEqual(risks, ['high', 'medium', 'low'])
+        self.assertEqual(body['summary']['high_risk'], 1)
+        self.assertEqual(body['summary']['medium_risk'], 1)
+        self.assertEqual(body['summary']['low_risk'], 1)
+
+    def test_daily_hours_setting_changes_risk(self):
+        """همان امتحان با ساعتِ آزادِ ۵ (تنظیمِ خودِ کاربر) کم‌خطر می‌شود —
+        ریسک به «ظرفیتِ اعلام‌شده‌ی» کاربر حساس است، نه عددِ ثابتِ سرور."""
+        subject = self.create_subject(self.alice, 'فلسفه')
+        self.create_exam(subject, days_ahead=5, hours=10)  # نیازِ روزانه = 2.0
+
+        # بدونِ تنظیمات: نخستین فراخوانی، تنظیمات را با پیش‌فرضِ ۲ ساعت
+        # می‌سازد (همان الگوی dashboard) → نیازِ روزانه‌ی 2.0 ≥ 2 → ریسکِ بالا
+        body_default = self.client_as(self.alice).get('/api/predictions/').json()
+        self.assertEqual(body_default['predictions'][0]['risk'], 'high')
+        self.assertEqual(StudyPlan.objects.get(user=self.alice).daily_available_hours, 2.0)
+
+        # با تنظیمِ ۵ ساعت: 2.0 < 0.75×5=3.75 → ریسکِ کم (ویرایشِ همان رکوردِ
+        # خودکار — قیدِ UNIQUEِ 0008 اجازه‌ی رکوردِ دوم نمی‌دهد)
+        plan = StudyPlan.objects.get(user=self.alice)
+        plan.daily_available_hours = 5.0
+        plan.save()
+        body_custom = self.client_as(self.alice).get('/api/predictions/').json()
+        self.assertEqual(body_custom['predictions'][0]['risk'], 'low')
+
+    def test_history_is_per_user_not_shared(self):
+        """تاریخچه‌ی آلیس مدلِ باب را رنگ نمی‌کند (آموزشِ کاربر-محور)."""
+        alice_subject = self.create_subject(self.alice, 'آمار')
+        for _ in range(2):
+            past = self.create_exam(alice_subject, days_ahead=-20, hours=4)
+            StudyLog.objects.create(user=self.alice, exam=past, hours_studied=8)
+
+        bob_subject = self.create_subject(self.bob, 'مبانی')
+        self.create_exam(bob_subject, days_ahead=7, hours=6)
+
+        alice_body = self.client_as(self.alice).get('/api/predictions/').json()
+        bob_body = self.client_as(self.bob).get('/api/predictions/').json()
+
+        self.assertEqual(alice_body['model']['status'], 'ok')
+        self.assertEqual(alice_body['model']['sample_count'], 2)
+
+        # باب: بدونِ تاریخچه → بی‌طرف؛ پیش‌بینی‌اش فقط امتحانِ خودش است
+        self.assertEqual(bob_body['model']['status'], 'no_history')
+        self.assertEqual(bob_body['model']['calibration_factor'], 1.0)
+        self.assertEqual(len(bob_body['predictions']), 1)
+        self.assertEqual(bob_body['predictions'][0]['subject'], 'مبانی')
+        self.assertEqual(bob_body['predictions'][0]['predicted_hours'], 6.0)

@@ -44,9 +44,10 @@ django-cors-headers>=4.4
 | `views.py` | تمام ViewSetها/Viewهای API؛ شاملِ الگوریتمِ داشبورد و برنامه‌ریزی در سطحِ درخواست |
 | `urls.py` | نقشه‌ی مسیرهای اپلیکیشن (زیرِ پیشوندِ `/api/`) |
 | `utils.py` | **قلبِ الگوریتمی**: `compute_subject_progress`, `generate_study_plan`, `format_plan_for_frontend`, `build_subject_distribution` |
+| `ml.py` | مؤلفه‌ی یادگیریِ آماری (از 2026-09-09): `fit_calibration_model`/`classify_bias`/`predict_hours`/`assess_exam_risk` (خالص، بدونِ ORM) + `build_training_samples`/`get_prediction_report` (ORM؛ نکته‌ی ۶.۱۵) |
 | `admin.py` | ثبتِ مدل‌ها در پنلِ `/admin/` |
 | `management/commands/seed_demo_data.py` | دستورِ تولیدِ داده‌ی نمونه برای تست |
-| `tests.py` | ۱۳۱ تستِ خودکارِ Django/DRF: هشت کلاسِ API (Auth تا الگوریتم؛ Auth شامل تست‌های تمدیدِ توکن) + کلاسِ `JWTTokenRotationBlacklistTests` (چرخش/لیستِ سیاه/خروجِ سرور-محور) + کلاسِ `PaginationAPITests` (صفحه‌بندیِ اختیاری) + کلاسِ `SettingsEnvVarsTests` (متغیرهایِ محیطیِ Production؛ شاملِ بوتِ واقعیِ مفسرِ جدا) + کلاسِ `StudyPlanUniqueConstraintTests` با `TransactionTestCase` برای قیدِ DB + کلاس‌های `StudyLogConcurrencyLockTests`/`StudyLogOrphanDeleteTests` (قفلِ هم‌زمانیِ select_for_update و حذفِ یتیم؛ نکته‌ی ۶.۱۲) + کلاس‌های `DatabaseUrlSettingsTests`/`PostgresForUpdateTests` (متغیرِ DATABASE_URL + قفلِ FOR UPDATE در PostgreSQL؛ نکته‌ی ۶.۱۳) + کلاس‌های `I18nAcceptLanguageTests`/`I18nCatalogIntegrityTests` (ترجمه‌ی پیام‌ها با Accept-Language + سلامتِ کاتالوگِ locale/en؛ نکته‌ی ۶.۱۴)؛ اجرا با `python manage.py test planner` |
+| `tests.py` | ۱۵۲ تستِ خودکارِ Django/DRF: هشت کلاسِ API (Auth تا الگوریتم؛ Auth شامل تست‌های تمدیدِ توکن) + کلاسِ `JWTTokenRotationBlacklistTests` (چرخش/لیستِ سیاه/خروجِ سرور-محور) + کلاسِ `PaginationAPITests` (صفحه‌بندیِ اختیاری) + کلاسِ `SettingsEnvVarsTests` (متغیرهایِ محیطیِ Production؛ شاملِ بوتِ واقعیِ مفسرِ جدا) + کلاسِ `StudyPlanUniqueConstraintTests` با `TransactionTestCase` برای قیدِ DB + کلاس‌های `StudyLogConcurrencyLockTests`/`StudyLogOrphanDeleteTests` (قفلِ هم‌زمانیِ select_for_update و حذفِ یتیم؛ نکته‌ی ۶.۱۲) + کلاس‌های `DatabaseUrlSettingsTests`/`PostgresForUpdateTests` (متغیرِ DATABASE_URL + قفلِ FOR UPDATE در PostgreSQL؛ نکته‌ی ۶.۱۳) + کلاس‌های `I18nAcceptLanguageTests`/`I18nCatalogIntegrityTests` (ترجمه‌ی پیام‌ها با Accept-Language + سلامتِ کاتالوگِ locale/en؛ نکته‌ی ۶.۱۴) + کلاس‌های `MLCalibrationMathTests`/`MLTrainingDataTests`/`MLPredictionsAPITests` (ریاضیاتِ خالص + داده‌ی آموزشی + endpointِ پیش‌بینی؛ نکته‌ی ۶.۱۵)؛ اجرا با `python manage.py test planner` |
 | `migrations/0001` تا `0008` | تاریخچه‌ی واقعیِ تکاملِ اسکیمای دیتابیس (تاریخ‌ها در `CHANGELOG.md`) |
 
 ### فرانت‌اند (`static/`)
@@ -60,7 +61,7 @@ django-cors-headers>=4.4
 | `study_plan.html` | برنامه‌ی مطالعه (`data-page="study-plan"`) |
 | `study_log.html` | ثبتِ مطالعه (`data-page="study-log"`) |
 | `app.js` | تمامِ منطقِ جاوااسکریپتی؛ روترِ سبک بر مبنایِ `data-page` در انتهای فایل |
-| `i18n.js` | زیرساختِ چندزبانیِ فرانت‌اند (از 2026-09-09): دیکشنریِ ۱۷۴ کلیدی + `t()` + `applyI18n()`؛ باید قبل از app.js لود شود (نکته‌ی ۶.۱۴) |
+| `i18n.js` | زیرساختِ چندزبانیِ فرانت‌اند (از 2026-09-09): دیکشنریِ ۱۹۳ کلیدی (۱۹ کلیدِ پنلِ پیش‌بینی، 2026-09-09) + `t()` + `applyI18n()`؛ باید قبل از app.js لود شود (نکته‌ی ۶.۱۴) |
 | `styles.css` | سیستمِ طراحی؛ متغیرهای رنگ/فاصله در بالای فایل (`:root`) |
 
 ## ۵. مدل‌های داده (ساختارِ رابطه‌ای)
@@ -102,6 +103,8 @@ User → StudyPlan (1→N در سطحِ مدل، ولی در عمل هر کار�
 
 ۶.۱۴ **در چندزبانی، msgid همان «متنِ فارسیِ اصلی» است و رشته‌ی رابطِ جدید باید هم‌زمان در سه جا بیاید.** از 2026-09-09 پیام‌های بک‌اند با `gettext`/`gettext_lazy` پیچیده شده‌اند (`views.py`/`serializers.py`/`utils.py`)، کاتالوگِ انگلیسی در `backend/locale/en/LC_MESSAGES/django.po` است و `django.mo` کامپایل‌شده عمداً commit شده (روی ویندوزِ کاربر msgfmt نیست؛ کامپایل فقط بعد از تغییرِ ترجمه با `scripts/compile_mo.py`). برایِ افزودن/تغییرِ پیام: (۱) متنِ فارسی در کد با `_()`، (۲) کلید/ترجمه در django.po + کامپایلِ مجدد، (۳) برایِ رشته‌ی فرانت‌اند، کلید در دیکشنریِ `static/i18n.js` (کلید = همان متنِ فارسی؛ فارسی خودِ کلید را برمی‌گرداند). `i18n.js` باید در HTML «قبل از» app.js لود شود (t باید قبل از اولین رندر موجود باشد) و app.js هدرِ Accept-Language را می‌فرستد — پیام‌های خطای API با زبانِ کاربر برمی‌گردند. رشته‌های دارایِ متغیر با الگوی `%(name)s` در بک‌اند و `{name}` در فرانت‌اند پارامتری‌اند (ترتیبِ کلمات در ترجمه آزاد). رگرسیون‌تست‌ها: کلاس‌های `I18nAcceptLanguageTests`/`I18nCatalogIntegrityTests` + تستِ Node خارج از ریپو.
 
+۶.۱۵ **مؤلفه‌ی ML (`planner/ml.py`) کاربر-محور و بدون‌ تغییرِ اسکیماست؛ قراردادهایش را نشکن.** (از 2026-09-09) مدلِ کالیبراسیونِ β هر کاربر فقط از امتحان‌هایِ *گذشته‌ی خودش* می‌آموزد (`build_training_samples`: exam_date < today و حداقل یک لاگ؛ planned = باقی‌مانده + Σhours_deducted و actual = Σhours_studied) — امتحان‌هایِ آینده/امروزی هرگز در آموزش نیستند (نشتِ آینده) ولی در پیش‌بینی (`exam_date >= today` و `study_hours_remaining > 0`) هستند. ریاضیات در توابعِ خالص (`fit_calibration_model` = LSQ از مبدأ + انقباضِ بیزی به ۱ با PRIOR_STRENGTH=4 + مهارِ [۰٫۲۵ , ۴]) جدا از ORM مانده تا با SimpleTestCase بدونِ DB تست شوند. `GET /api/predictions/` داده‌ی **ماشین‌خوان** برمی‌گرداند (risk/bias مقادیرِ enumاند، نه پیام) — متنِ نمایشی فقط در فرانت‌endet با `RISK_LABELS`/`BIAS_LABELS` و کلیدهایِ i18n.js ساخته می‌شود؛ پس این endpoint هرگز رشته‌ی gettext جدید نمی‌سازد و کاتالوگِ locale/en نباید به‌خاطرِ آن دست بخورد. ساعتِ آزادِ روزانه از همان `_get_or_create_plan_settings` ویو می‌آید (یک منبعِ حقیقت با الگوریتمِ برنامه‌ریزی). الگوریتمِ قانون‌محورِ `generate_study_plan` عمداً دست‌نخورده ماند: پیش‌بینیِ ML قرینه/مکملِ برنامه است، نه جایگزینش — اگر روزی قرار شد β در تخصیصِ ساعت هم اثر بگذارد، باید opt-in با پارامتر باشد و رگرسیون‌تستِ «بدونِ پارامتر = رفتارِ قبلی» بگیردش. رگرسیون‌تست‌ها: کلاس‌های `MLCalibrationMathTests`/`MLTrainingDataTests`/`MLPredictionsAPITests`.
+
 ## ۷. Conventions رعایت‌شده در کد
 
 - تمامِ کامنت‌های کد و پیام‌های خطا/UI به **فارسی** نوشته شده‌اند؛ نام‌های متغیر/تابع/کلاس به **انگلیسی**.
@@ -126,7 +129,7 @@ JWT با `djangorestframework-simplejwt`. توکنِ دسترسی: ۱ روز. ت
 | `STATICFILES_DIRS` | `[BASE_DIR.parent / 'static']` | فرانت‌اند را هم سرو می‌کند |
 | `SIMPLE_JWT` | دسترسی ۱ روز / تمدید ۷ روز | چرخش + لیستِ سیاه فعال (از 2026-09-08؛ نکته‌ی ۶.۱۱) |
 
-پیش‌فرض‌ها عمداً «dev-safe»اند: بدونِ ست‌کردنِ هیچ متغیری، همان رفتارِ قبل از 2026-09-06 برقرار است (۱۳۱ تست بدونِ متغیر سبز می‌شوند). فایلِ `.env` هنوز وجود ندارد و کتابخانه‌ی dotenv هم اضافه نشده؛ متغیرها با `set`/`setx` (ویندوز) یا `export` (لینوکس) ست می‌شوند — جدولِ کامل در `README.md` بخشِ ۱۰.
+پیش‌فرض‌ها عمداً «dev-safe»اند: بدونِ ست‌کردنِ هیچ متغیری، همان رفتارِ قبل از 2026-09-06 برقرار است (۱۵۲ تست بدونِ متغیر سبز می‌شوند). فایلِ `.env` هنوز وجود ندارد و کتابخانه‌ی dotenv هم اضافه نشده؛ متغیرها با `set`/`setx` (ویندوز) یا `export` (لینوکس) ست می‌شوند — جدولِ کامل در `README.md` بخشِ ۱۰.
 
 ## ۱۰. فایل‌های مستندات مرتبط
 

@@ -200,6 +200,26 @@ const TRANSLATIONS = {
     "متوسط 🟡": "Medium 🟡",
     "خیلی زیاد 🔴": "Very high 🔴",
     "لطفاً ابتدا درسی ثبت کنید": "Please add a subject first",
+    // --- پنلِ «پیش‌بینیِ هوشمند» (مؤلفه‌ی یادگیریِ آماری، از 2026-09-09) ---
+    "پیش‌بینی هوشمند زمان واقعی": "Smart Actual-Time Forecast",
+    "پیش‌بینیِ ساعتِ واقعیِ موردنیاز از تاریخچه‌ی مطالعه‌ی خودِ شما": "Predicts the real hours you will need, learned from your own study history",
+    "در حال بارگذاری پیش‌بینی...": "Loading predictions...",
+    "امتحانِ پیش‌رویی برای پیش‌بینی وجود ندارد.": "No upcoming exams to predict.",
+    "مدلِ یادگیریِ شما": "Your learning model",
+    "سوگیریِ تخمین": "Estimation bias",
+    "تخمین‌های شما کمتر از واقعیت است": "Your estimates run low (you study more than planned)",
+    "تخمین‌های شما بیشتر از واقعیت است": "Your estimates run high (you need less than planned)",
+    "تخمین‌های شما دقیق است": "Your estimates are on target",
+    "هنوز تاریخچه‌ی کافی برای یادگیری نیست": "Not enough history to learn from yet",
+    "نمونه‌های آموزشی": "Training samples",
+    "اعتماد مدل": "Model confidence",
+    "{value}٪": "{value}%",
+    "ریسک بالا": "High risk",
+    "ریسک متوسط": "Medium risk",
+    "ریسک کم": "Low risk",
+    "تخمین شما": "Your estimate",
+    "نیاز روزانه": "Daily need",
+    "روزهای باقی‌مانده": "Days left",
 };
 
 // زبانِ فعال: فقط «en» ترجمه می‌شود؛ هر مقدارِ دیگر = فارسی (پیش‌فرض)

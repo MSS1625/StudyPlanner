@@ -30,6 +30,10 @@ from django.db import IntegrityError
 from .models import Subject, Exam, StudyPlan, StudyLog
 from .serializers import UserSerializer, SubjectSerializer, ExamSerializer, StudyPlanSerializer, StudyLogSerializer
 from .utils import generate_study_plan, format_plan_for_frontend, build_subject_distribution, compute_subject_progress
+# مؤلفه‌ی یادگیریِ آماری (از 2026-09-09): مدلِ کالیبراسیونِ «تخمینِ ساعتیِ
+# کاربر ↔ واقعیتِ ثبت‌شده» + پیش‌بینیِ ساعتِ واقعیِ موردنیاز و ریسکِ
+# عقب‌افتادن — جزئیات و محدودیت‌های مدل در planner/ml.py.
+from .ml import get_prediction_report
 
 
 # ---------------------------------------------------------------------------
@@ -443,3 +447,36 @@ def dashboard(request):
         'upcoming_exams': upcoming_exams_data,
         'study_distribution': study_distribution,
     })
+
+
+# ---------------------------------------------------------------------------
+# پیش‌بینیِ هوشمند (مؤلفه‌ی یادگیریِ آماری — 2026-09-09)
+# ---------------------------------------------------------------------------
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def predictions(request):
+    """
+    GET /api/predictions/ — پیش‌بینیِ «ساعتِ واقعیِ موردنیاز» برایِ امتحان‌هایِ
+    آینده + ریسکِ عقب‌افتادن از برنامه.
+
+    پاسخ سه بخش دارد (شکلِ ثابت، مشابهِ dashboard):
+      model       وضعیتِ مدلِ کالیبراسیونِ کاربر: ضریبِ β (نسبتِ واقعیت به
+                 تخمین)، تعدادِ نمونه‌ها، اعتماد و سوگیری — بدونِ تاریخچه،
+                 β=۱ است یعنی «تخمینِ دستی بی‌طرفانه قبول می‌شود».
+      predictions به‌ازای هر امتحانِ آینده‌ی دارایِ ساعتِ باقی‌مانده:
+                 ساعتِ اعلام‌شده، ساعتِ پیش‌بینی‌شده، نیازِ روزانه و ریسک.
+      summary     شمارشِ امتحان‌ها به تفکیکِ ریسک + جمعِ ساعتِ پیش‌بینی‌شده.
+
+    ساعتِ آزادِ روزانه از همان تنظیماتِ StudyPlan خوانده می‌شود که الگوریتمِ
+    برنامه‌ریزی هم استفاده می‌کند (یک منبعِ حقیقت)؛ اگر کاربر هنوز تنظیماتی
+    نساخته باشد با پیش‌فرضِ ۲ ساعت ساخته می‌شود.
+
+    نکته: پیام‌های این پاسخ عمداً ماشین‌خوانند (risk: high/medium/low و
+    bias: underestimates/...)؛ متنِ نمایشی در فرانت‌اند با i18n.js ترجمه
+    می‌شود (نکته‌ی ۶.۱۴ AI_CONTEXT) — پس این endpoint رشته‌ی gettextِ
+    جدیدی اضافه نمی‌کند و کاتالوگِ locale/en دست‌نخورده می‌ماند.
+    """
+    settings_obj = _get_or_create_plan_settings(request.user)
+    report = get_prediction_report(request.user, settings_obj.daily_available_hours)
+    return Response(report)

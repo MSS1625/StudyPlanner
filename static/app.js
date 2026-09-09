@@ -33,6 +33,9 @@ const endpoints = {
     examDetail: (id) => `/api/exams/${id}/`,
     studyPlan: (range) => `/api/study-plan/?range=${range}`,
     studyPlanGenerate: '/api/study-plan/generate/',
+    // پیش‌بینیِ هوشمند (از 2026-09-09): مؤلفه‌ی یادگیریِ آماری — مدلِ
+    // کالیبراسیون + ساعتِ واقعیِ پیش‌بینی‌شده برایِ امتحان‌هایِ آینده
+    predictions: '/api/predictions/',
     studyLogs: '/api/study-logs/',
     studyLogDetail: (id) => `/api/study-logs/${id}/`,
 };
@@ -969,6 +972,115 @@ const loadStudyPlan = async (range = 'daily') => {
 };
 
 // ---------------------------------------------------------------------
+// پیش‌بینیِ هوشمند (مؤلفه‌ی یادگیریِ آماری — 2026-09-09)
+// ---------------------------------------------------------------------
+
+// مقدارهایِ ماشین‌خوانِ API (risk/bias از GET /api/predictions/) را به
+// متنِ نمایشی نگاشت می‌کنیم؛ کلید = متنِ فارسی (عرفِ msgid، نکته‌ی 6.14
+// AI_CONTEXT) و ترجمه‌ی en از دیکشنریِ i18n.js می‌آید.
+const RISK_LABELS = {
+    high: 'ریسک بالا',
+    medium: 'ریسک متوسط',
+    low: 'ریسک کم',
+};
+
+const BIAS_LABELS = {
+    underestimates: 'تخمین‌های شما کمتر از واقعیت است',
+    overestimates: 'تخمین‌های شما بیشتر از واقعیت است',
+    accurate: 'تخمین‌های شما دقیق است',
+    unknown: 'هنوز تاریخچه‌ی کافی برای یادگیری نیست',
+};
+
+// داده‌ی JSON دریافتی از GET /api/predictions/ (شکل: {model, predictions,
+// summary}) را در پنلِ «پیش‌بینیِ هوشمند» صفحه‌ی برنامه رندر می‌کند.
+// ساختارِ بلوک‌ها عمداً همان plan-block/plan-taskِ بالا است تا بدونِ CSSِ
+// جدید، هم‌ظاهرِ بقیه‌ی صفحه بماند؛ نامِ درس‌ها مثلِ همیشه escape می‌شوند.
+const renderPredictions = (report) => {
+    const container = document.getElementById('predictionsContainer');
+    if (!container) return;
+
+    container.innerHTML = '';
+    const items = report?.predictions ?? [];
+
+    if (!items.length) {
+        container.innerHTML = `<p class="empty-state">${escapeHtml(t('امتحانِ پیش‌رویی برای پیش‌بینی وجود ندارد.'))}</p>`;
+        return;
+    }
+
+    // --- کارتِ وضعیتِ مدل: ضریبِ کالیبراسیون، سوگیری و اعتماد ---
+    const model = report?.model ?? {};
+    const biasLabel = BIAS_LABELS[model.bias] ?? BIAS_LABELS.unknown;
+    const modelBlock = document.createElement('div');
+    modelBlock.className = 'plan-block';
+    modelBlock.innerHTML = `
+        <div class="plan-header">
+            <h4>${escapeHtml(t('مدلِ یادگیریِ شما'))}</h4>
+            <span class="plan-hours">×${escapeHtml(String(model.calibration_factor ?? 1))}</span>
+        </div>
+        <div class="plan-tasks">
+            <div class="plan-task">
+                <strong>${escapeHtml(t('سوگیریِ تخمین'))}</strong>
+                <span>${escapeHtml(t(biasLabel))}</span>
+            </div>
+            <div class="plan-task">
+                <strong>${escapeHtml(t('نمونه‌های آموزشی'))}</strong>
+                <span>${escapeHtml(String(model.sample_count ?? 0))}</span>
+            </div>
+            <div class="plan-task">
+                <strong>${escapeHtml(t('اعتماد مدل'))}</strong>
+                <span>${escapeHtml(t('{value}٪', { value: Math.round((model.confidence ?? 0) * 100) }))}</span>
+            </div>
+        </div>
+    `;
+    container.appendChild(modelBlock);
+
+    // --- به‌ازای هر امتحانِ آینده: یک بلوکِ پیش‌بینی ---
+    items.forEach((item) => {
+        const riskLabel = RISK_LABELS[item.risk] ?? RISK_LABELS.low;
+        const block = document.createElement('div');
+        block.className = 'plan-block';
+        block.innerHTML = `
+            <div class="plan-header">
+                <h4>${escapeHtml(item.subject)} <span class="plan-days-chip">${escapeHtml(t(riskLabel))}</span></h4>
+                <span class="plan-hours">${escapeHtml(t('{hours} ساعت', { hours: item.predicted_hours ?? 0 }))}</span>
+            </div>
+        `;
+        const tasksWrapper = document.createElement('div');
+        tasksWrapper.className = 'plan-tasks';
+        tasksWrapper.innerHTML = `
+            <div class="plan-task">
+                <strong>${escapeHtml(t('تخمین شما'))}</strong>
+                <span>${escapeHtml(t('{hours} ساعت', { hours: item.planned_hours ?? 0 }))}</span>
+            </div>
+            <div class="plan-task">
+                <strong>${escapeHtml(t('نیاز روزانه'))}</strong>
+                <span>${escapeHtml(t('{hours} ساعت', { hours: item.required_daily_hours ?? 0 }))}</span>
+            </div>
+            <div class="plan-task">
+                <strong>${escapeHtml(t('روزهای باقی‌مانده'))}</strong>
+                <span>${escapeHtml(t('{days} روز', { days: item.days_left ?? 0 }))}</span>
+            </div>
+        `;
+        block.appendChild(tasksWrapper);
+        container.appendChild(block);
+    });
+};
+
+// دریافتِ گزارشِ پیش‌بینی از API و رندرِ آن (مستقل از بازه‌ی روزانه/هفتگی —
+// پیش‌بینی همیشه برای همه‌ی امتحان‌هایِ آینده است)
+const loadPredictions = async () => {
+    try {
+        const report = await apiGet(endpoints.predictions);
+        renderPredictions(report);
+    } catch (error) {
+        const container = document.getElementById('predictionsContainer');
+        if (container) {
+            container.innerHTML = `<p class="empty-state">${escapeHtml(error.message)}</p>`;
+        }
+    }
+};
+
+// ---------------------------------------------------------------------
 // صفحات ورود / ثبت‌نام
 // ---------------------------------------------------------------------
 
@@ -1244,6 +1356,9 @@ const handleDailyHoursForm = () => {
             // بعد از تولیدِ مجدد، برنامه را دوباره برای همان بازه‌ای که کاربر
             // در حالِ مشاهده‌اش بود (روزانه یا هفتگی) بارگذاری می‌کنیم
             await loadStudyPlan(getActiveRange());
+            // پیش‌بینی‌ها هم به‌روز می‌شوند: سطحِ ریسک به ساعتِ آزادِ روزانه
+            // (که همین‌جا عوض شد) حساس است — نه فقط به تاریخِ امتحان
+            loadPredictions();
             updateStatusIndicator('online');
         } catch (error) {
             showToast(error.message, 'error');
@@ -1265,6 +1380,8 @@ const initStudyPlanPage = () => {
         });
     });
     loadStudyPlan('daily');
+    // پنلِ «پیش‌بینیِ هوشمند» (از 2026-09-09) — مستقل از بازه‌ی نمایش
+    loadPredictions();
 };
 
 // ---------------------------------------------------------------------
