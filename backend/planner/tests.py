@@ -19,6 +19,8 @@
 #   - SettingsEnvVarsTests .... تنظیماتِ محیطیِ Production (بوتِ مفسرِ جدا؛ بدونِ DB)
 #   - DatabaseUrlSettingsTests  دیتابیس از متغیرِ DATABASE_URL — PostgreSQL + پیش‌فرضِ امنِ SQLite (2026-09-09)
 #   - PostgresForUpdateTests ... رگرسیونِ FOR UPDATE در SQL — فقط وقتی موتورِ فعال PostgreSQL است
+#   - I18nAcceptLanguageTests . ترجمه‌ی پیام‌هایِ API با هدرِ Accept-Language (2026-09-09)
+#   - I18nCatalogIntegrityTests  سلامتِ کاتالوگِ locale/en + تنظیماتِ چندزبانی (2026-09-09)
 #
 # اجرا (از پوشه‌ی backend):
 #   python manage.py test planner -v 2
@@ -32,6 +34,7 @@
 #     خورده تا هدفش مستند بماند.
 # ----------------------------------------------------------------------------
 
+import json
 import os
 import subprocess
 import sys
@@ -1796,3 +1799,210 @@ class PostgresForUpdateTests(TransactionTestCase):
             any('FOR UPDATE' in q['sql'] for q in ctx.captured_queries),
             msg=[q['sql'] for q in ctx.captured_queries],
         )
+
+
+# ---------------------------------------------------------------------------
+# ۱۲) چندزبانی (i18n) — مذاکره‌ی Accept-Language + کاتالوگِ en (2026-09-09)
+# ---------------------------------------------------------------------------
+
+class I18nAcceptLanguageTests(BaseAPITestCase):
+    """
+    پیام‌هایِ API با زبانِ فعالِ درخواست ترجمه می‌شوند:
+
+    - بدونِ هدرِ Accept-Language → پیش‌فرضِ fa → همان متنِ فارسیِ اصلی
+      (رفتارِ دقیقاً همانِ قبل از چندزبانی‌شدن).
+    - Accept-Language: en → ترجمه‌ی انگلیسی از کاتالوگِ locale/en.
+    - زبانِ پشتیبانی‌نشده → fallback به fa.
+
+    مبنایِ کار: LocaleMiddleware + gettext در views/serializers/utils و
+    هدری که app.js برایِ هر درخواست می‌فرستد (Accept-Language).
+    """
+
+    LOGIN = '/api/auth/login/'
+
+    def _login_error(self, client=None, **headers):
+        """ورودِ ناموفق با هدرهایِ دلخواه؛ متنِ خطا را برمی‌گرداند."""
+        response = (client or self.client).post(
+            self.LOGIN,
+            {'username': 'alice', 'password': 'wrong-pass'},
+            format='json',
+            **headers,
+        )
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        return response.json()['error']
+
+    def test_no_header_keeps_persian_default(self):
+        """بدونِ Accept-Language: پیامِ خطا همانِ متنِ فارسیِ اصلی است (پیش‌فرضِ fa)."""
+        self.assertEqual(self._login_error(), 'نام کاربری یا رمز عبور اشتباه است')
+
+    def test_english_header_translates_error(self):
+        """Accept-Language: en → ترجمه‌ی انگلیسی از کاتالوگِ پروژه."""
+        self.assertEqual(
+            self._login_error(HTTP_ACCEPT_LANGUAGE='en'),
+            'Incorrect username or password.',
+        )
+
+    def test_persian_header_keeps_original(self):
+        """Accept-Language: fa → متنِ اصلی (fa کاتالوگی در پروژه ندارد)."""
+        self.assertEqual(
+            self._login_error(HTTP_ACCEPT_LANGUAGE='fa'),
+            'نام کاربری یا رمز عبور اشتباه است',
+        )
+
+    def test_unsupported_language_falls_back_to_default(self):
+        """زبانِ پشتیبانی‌نشده (de) → fallback به fa → متنِ فارسی."""
+        self.assertEqual(
+            self._login_error(HTTP_ACCEPT_LANGUAGE='de'),
+            'نام کاربری یا رمز عبور اشتباه است',
+        )
+
+    def test_realistic_browser_header_selects_english(self):
+        """هدرِ واقعیِ مرورگر (en-US,en;q=0.9,fa;q=0.8) → en انتخاب می‌شود."""
+        self.assertEqual(
+            self._login_error(HTTP_ACCEPT_LANGUAGE='en-US,en;q=0.9,fa;q=0.8'),
+            'Incorrect username or password.',
+        )
+
+    def test_english_duplicate_subject_message(self):
+        """پیامِ اعتبارسنجیِ سریالایزر (gettext_lazy) هم با en ترجمه می‌شود."""
+        self.create_subject(self.alice, 'ریاضی')
+        response = self.client_as(self.alice).post(
+            '/api/subjects/', {'name': 'ریاضی', 'difficulty': 3}, format='json',
+            HTTP_ACCEPT_LANGUAGE='en',
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        body_text = json.dumps(response.json(), ensure_ascii=False)
+        self.assertIn('You have already registered a subject with this name.', body_text)
+        self.assertNotIn('شما قبلاً', body_text)
+
+    def test_english_generate_validation_errors(self):
+        """خطاهایِ generate با en: هم «الزامی» هم «بازه‌ی ۰ تا ۲۴»."""
+        client = self.client_as(self.alice)
+        missing = client.post(
+            '/api/study-plan/generate/', {}, format='json', HTTP_ACCEPT_LANGUAGE='en',
+        )
+        self.assertEqual(missing.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(missing.json()['error'], 'Daily study hours is required.')
+
+        bad = client.post(
+            '/api/study-plan/generate/',
+            {'daily_available_hours': 30},
+            format='json',
+            HTTP_ACCEPT_LANGUAGE='en',
+        )
+        self.assertEqual(bad.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(bad.json()['error'], 'Study hours must be a number between 0 and 24.')
+
+    def test_english_plan_title_and_badge(self):
+        """خروجیِ برنامه با en: عنوانِ «Today - تاریخ» و نشانِ «N hours» (interpolation)."""
+        subject = self.create_subject(self.alice, 'ریاضی')
+        self.create_exam(subject, days_ahead=3, hours=6)
+
+        body = self.client_as(self.alice).get(
+            '/api/study-plan/', HTTP_ACCEPT_LANGUAGE='en'
+        ).json()
+        self.assertNotEqual(body['schedule'], [])
+        first = body['schedule'][0]
+        self.assertTrue(first['title'].startswith('Today - '), first['title'])
+        self.assertTrue(first['hours_badge'].endswith(' hours'), first['hours_badge'])
+
+    def test_english_dashboard_alert(self):
+        """هشدارِ danger داشبورد با en: جمله‌ی کاملِ ترجمه‌شده با پارامترها."""
+        subject = self.create_subject(self.alice, 'ریاضی')
+        self.create_exam(subject, days_ahead=2, hours=8)
+
+        body = self.client_as(self.alice).get(
+            '/api/dashboard/', HTTP_ACCEPT_LANGUAGE='en'
+        ).json()
+        danger = [a for a in body['alerts'] if a['type'] == 'danger']
+        self.assertTrue(danger)
+        self.assertTrue(danger[0]['message'].startswith('Only 2 days left'), danger[0]['message'])
+        self.assertIn('hours of study remaining', danger[0]['message'])
+        # نامِ درس «داده» است نه رشته‌ی رابط — ترجمه نمی‌شود
+        self.assertIn('ریاضی', danger[0]['message'])
+
+
+class I18nCatalogIntegrityTests(SimpleTestCase):
+    """
+    سلامتِ کاتالوگِ locale/en و تنظیماتِ چندزبانی:
+
+    - فایلِ django.mo موجود است و gettext پایتونی (همان مسیرِ جنگو) می‌خواندش
+      — رگرسیونِ کامپایل: ترجمه‌ها نباید «خودِ کلید» باشند (باگِ msgstr==msgid).
+    - همه‌ی ورودی‌هایِ .po ترجمه‌ی غیرخالیِ متفاوت از کلید دارند.
+    - کلیدِ ناموجود → همانِ متنِ اصلی (fallback).
+    - WEEKDAY_FA با gettext_lazy تا زمانِ رندر ترجمه‌نشده می‌ماند.
+    - تنظیمات: fa پیش‌فرض، fa/en پشتیبانی‌شده، LOCALE_PATHS، ترتیبِ LocaleMiddleware.
+    """
+
+    LOCALE_DIR = BASE_DIR / 'locale'
+    PO_FILE = LOCALE_DIR / 'en' / 'LC_MESSAGES' / 'django.po'
+    MO_FILE = LOCALE_DIR / 'en' / 'LC_MESSAGES' / 'django.mo'
+
+    def _load_catalog(self):
+        """کاتالوگ را با gettext پایتونی می‌خواند (دقیقاً مثل جنگو)."""
+        import gettext as pygettext
+        return pygettext.translation('django', localedir=str(self.LOCALE_DIR), languages=['en'])
+
+    def test_mo_file_exists_and_loads(self):
+        """django.mo در ریپو هست (msgfmt روی ویندوز لازم نیست) و خوانا است."""
+        self.assertTrue(self.MO_FILE.exists(), 'django.mo باید commit شده باشد')
+        tr = self._load_catalog()
+        self.assertEqual(
+            tr.gettext('نام کاربری یا رمز عبور اشتباه است'), 'Incorrect username or password.',
+        )
+
+    def test_po_entries_all_have_distinct_translations(self):
+        """رگرسیونِ کامپایل: هیچ ورودیِ .po ترجمه‌ی خالی یا «برابرِ کلید» ندارد."""
+        entries = []
+        msgid = msgstr = None
+        for line in self.PO_FILE.read_text(encoding='utf-8').splitlines():
+            line = line.strip()
+            if line.startswith('msgid '):
+                if msgid is not None:
+                    entries.append((msgid, msgstr))
+                msgid, msgstr = line[6:].strip().strip('"'), ''
+            elif line.startswith('msgstr '):
+                msgstr = line[7:].strip().strip('"')
+        if msgid is not None:
+            entries.append((msgid, msgstr))
+
+        real = [(k, v) for k, v in entries if k]  # هدر (msgid خالی) کنار می‌رود
+        self.assertGreaterEqual(len(real), 25)
+        for key, value in real:
+            self.assertTrue(value, f'msgstr خالی برای: {key[:50]}')
+            self.assertNotEqual(key, value, f'ترجمه همانِ کلید است: {key[:50]}')
+
+    def test_unknown_key_falls_back_to_original(self):
+        """کلیدِ خارج از کاتالوگ → همانِ متن (سپرِ gettext)."""
+        tr = self._load_catalog()
+        self.assertEqual(tr.gettext('کلیدی که در کاتالوگ نیست'), 'کلیدی که در کاتالوگ نیست')
+
+    def test_weekday_fa_is_lazily_translated(self):
+        """WEEKDAY_FA تا زمانِ رندر ترجمه‌نشده می‌ماند و با زبانِ فعال عوض می‌شود."""
+        from django.utils import translation
+        from planner.utils import WEEKDAY_FA
+        try:
+            translation.activate('en')
+            self.assertEqual(str(WEEKDAY_FA[0]), 'Monday')
+            translation.activate('fa')
+            self.assertEqual(str(WEEKDAY_FA[0]), 'دوشنبه')
+        finally:
+            translation.deactivate()
+
+    def test_language_settings_shape(self):
+        """fa پیش‌فرض؛ fa+en پشتیبانی‌شده؛ LOCALE_PATHS به backend/locale اشاره می‌کند."""
+        from django.conf import settings
+        self.assertEqual(settings.LANGUAGE_CODE, 'fa')
+        self.assertEqual({code for code, _ in settings.LANGUAGES}, {'fa', 'en'})
+        self.assertEqual(list(settings.LOCALE_PATHS), [BASE_DIR / 'locale'])
+
+    def test_locale_middleware_position(self):
+        """LocaleMiddleware بعد از SessionMiddleware و قبل از CommonMiddleware است
+        (ترتیبِ لازمِ مستندِ جنگو)."""
+        from django.conf import settings
+        mw = list(settings.MIDDLEWARE)
+        session = mw.index('django.contrib.sessions.middleware.SessionMiddleware')
+        locale_mw = mw.index('django.middleware.locale.LocaleMiddleware')
+        common = mw.index('django.middleware.common.CommonMiddleware')
+        self.assertLess(session, locale_mw)
+        self.assertLess(locale_mw, common)

@@ -21,6 +21,9 @@ from rest_framework.exceptions import PermissionDenied, ValidationError, Validat
 # RefreshToken: برای ساختنِ توکن‌های JWT (دسترسی + تمدید) هنگام ثبت‌نام/ورود
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import authenticate
+# gettext (از 2026-09-09): پیام‌هایِ API با زبانِ درخواست (Accept-Language)
+# ترجمه می‌شوند؛ متنِ اصلی فارسی است و کاتالوگِ en ترجمه‌ی انگلیسی را می‌دهد.
+from django.utils.translation import gettext as _
 from django.db import IntegrityError
 from django.db import IntegrityError
 
@@ -72,7 +75,7 @@ def login(request):
             'refresh': str(refresh),
             'access': str(refresh.access_token),
         })
-    return Response({'error': 'نام کاربری یا رمز عبور اشتباه است'}, status=status.HTTP_401_UNAUTHORIZED)
+    return Response({'error': _('نام کاربری یا رمز عبور اشتباه است')}, status=status.HTTP_401_UNAUTHORIZED)
 
 
 # ---------------------------------------------------------------------------
@@ -176,7 +179,7 @@ class ExamViewSet(viewsets.ModelViewSet):
         # بررسیِ امنیتیِ اضافه: حتی اگر کاربر شناسه‌ی یک درسِ متعلق به
         # کاربرِ دیگر را در بدنه‌ی درخواست بفرستد، اینجا رد می‌شود.
         if subject.user != self.request.user:
-            raise PermissionDenied("شما مجاز به ایجاد امتحان برای این درس نیستید")
+            raise PermissionDenied(_("شما مجاز به ایجاد امتحان برای این درس نیستید"))
         serializer.save()
 
     def perform_update(self, serializer):
@@ -190,7 +193,7 @@ class ExamViewSet(viewsets.ModelViewSet):
             'subject', serializer.instance.subject
         )
         if subject.user != self.request.user:
-            raise PermissionDenied("شما مجاز به تغییرِ درسِ این امتحان نیستید")
+            raise PermissionDenied(_("شما مجاز به تغییرِ درسِ این امتحان نیستید"))
         serializer.save()
 
 
@@ -208,7 +211,7 @@ class StudyLogViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         exam = serializer.validated_data['exam']
         if exam.subject.user != self.request.user:
-            raise PermissionDenied("شما مجاز به ثبت گزارش مطالعه برای این امتحان نیستید")
+            raise PermissionDenied(_("شما مجاز به ثبت گزارش مطالعه برای این امتحان نیستید"))
         # هنگام ذخیره، به صورت خودکار کاربر فعلی را به لاگ وصل می‌کنیم
         # (توجه: خودِ متد save() مدل StudyLog، به‌صورت خودکار ساعتِ باقی‌مانده‌ی
         # امتحانِ مربوطه را هم کم می‌کند؛ اینجا فقط رکوردِ لاگ ذخیره می‌شود)
@@ -252,8 +255,8 @@ class StudyPlanViewSet(viewsets.ModelViewSet):
         # تبدیل می‌کند (همان الگویِ نامِ درسِ تکراری در SubjectViewSet).
         if StudyPlan.objects.filter(user=self.request.user).exists():
             raise ValidationError({
-                'detail': 'تنظیماتِ برنامه‌یِ مطالعه برای این کاربر از قبل موجود است؛ '
-                          'برای تغییر، از generate یا PATCH استفاده کنید.'
+                'detail': _('تنظیماتِ برنامه‌یِ مطالعه برای این کاربر از قبل موجود است؛ '
+                            'برای تغییر، از generate یا PATCH استفاده کنید.')
             })
         try:
             serializer.save(user=self.request.user)
@@ -262,8 +265,8 @@ class StudyPlanViewSet(viewsets.ModelViewSet):
             # ساخته شد؛ قیدِ DB آن را بلاک کرد و اینجا به 400 خوانا
             # تبدیل می‌شود.
             raise ValidationError({
-                'detail': 'تنظیماتِ برنامه‌یِ مطالعه برای این کاربر از قبل موجود است؛ '
-                          'برای تغییر، از generate یا PATCH استفاده کنید.'
+                'detail': _('تنظیماتِ برنامه‌یِ مطالعه برای این کاربر از قبل موجود است؛ '
+                            'برای تغییر، از generate یا PATCH استفاده کنید.')
             })
 
     def list(self, request, *args, **kwargs):
@@ -296,14 +299,14 @@ class StudyPlanViewSet(viewsets.ModelViewSet):
         daily_hours = request.data.get('daily_available_hours')
 
         if daily_hours is None:
-            return Response({"error": "ساعت مطالعه روزانه الزامی است."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": _("ساعت مطالعه روزانه الزامی است.")}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             daily_hours = float(daily_hours)
             if daily_hours <= 0 or daily_hours > 24:
                 raise ValueError
         except (TypeError, ValueError):
-            return Response({"error": "ساعت مطالعه باید عددی بین ۰ تا ۲۴ باشد."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": _("ساعت مطالعه باید عددی بین ۰ تا ۲۴ باشد.")}, status=status.HTTP_400_BAD_REQUEST)
 
         settings_obj = _get_or_create_plan_settings(request.user)
         settings_obj.daily_available_hours = daily_hours
@@ -391,13 +394,20 @@ def dashboard(request):
         if days_left <= 3:
             alerts.append({
                 'type': 'danger',
-                'message': f"فقط {max(days_left, 0)} روز تا امتحان {exam.subject.name} مانده و {exam.study_hours_remaining} ساعت مطالعه باقی است!",
+                'message': _("فقط %(days)s روز تا امتحان %(exam)s مانده و %(hours)s ساعت مطالعه باقی است!") % {
+                    'days': max(days_left, 0),
+                    'exam': exam.subject.name,
+                    'hours': exam.study_hours_remaining,
+                },
                 'subject': exam.subject.name,
             })
         elif days_left <= 7:
             alerts.append({
                 'type': 'warning',
-                'message': f"{days_left} روز تا امتحان {exam.subject.name} باقی مانده. برنامه‌ات را جدی بگیر.",
+                'message': _("%(days)s روز تا امتحان %(exam)s باقی مانده. برنامه‌ات را جدی بگیر.") % {
+                    'days': days_left,
+                    'exam': exam.subject.name,
+                },
                 'subject': exam.subject.name,
             })
 
@@ -406,10 +416,12 @@ def dashboard(request):
     today_tasks = raw_plan.get(today.isoformat(), [])
     if today_tasks:
         # یک جمله‌ی طبیعی و خوانا از لیستِ تسک‌های امروز می‌سازیم
-        tasks_text = "، ".join(f"{task['subject']} ({task['hours']} ساعت)" for task in today_tasks)
+        tasks_text = _("، ").join(
+            _("%(subject)s (%(hours)s ساعت)") % task for task in today_tasks
+        )
         alerts.append({
             'type': 'info',
-            'message': f"طبق برنامه‌ی امروز، پیشنهاد می‌شود روی {tasks_text} کار کنی.",
+            'message': _("طبق برنامه‌ی امروز، پیشنهاد می‌شود روی %(tasks)s کار کنی.") % {'tasks': tasks_text},
             'subject': None,
         })
 

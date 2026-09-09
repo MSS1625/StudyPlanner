@@ -16,6 +16,8 @@ from django.contrib.auth.models import User
 from .models import Subject, Exam, StudyPlan, StudyLog
 # تابع کمکی که درصد پیشرفتِ یک درس را حساب می‌کند (تعریف‌شده در utils.py)
 from .utils import compute_subject_progress
+# gettext_lazy (از 2026-09-09): پیام‌هایِ اعتبارسنجی هم با زبانِ درخواست ترجمه می‌شوند.
+from django.utils.translation import gettext_lazy as _
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -26,12 +28,12 @@ class UserSerializer(serializers.ModelSerializer):
     # به‌صورت پیش‌فرض، ModelSerializer یکتا بودنِ username را چک نمی‌کند مگر
     # این‌که خودمان یک UniqueValidator با پیامِ خطای دلخواه اضافه کنیم.
     username = serializers.CharField(
-        validators=[UniqueValidator(queryset=User.objects.all(), message="این نام کاربری قبلاً ثبت شده است.")]
+        validators=[UniqueValidator(queryset=User.objects.all(), message=_("این نام کاربری قبلاً ثبت شده است."))]
     )
     email = serializers.EmailField(
         required=False,
         allow_blank=True,  # این خط حتماً باید اضافه شود
-        validators=[UniqueValidator(queryset=User.objects.all(), message="این ایمیل قبلاً ثبت شده است.")]
+        validators=[UniqueValidator(queryset=User.objects.all(), message=_("این ایمیل قبلاً ثبت شده است."))]
     )
 
     class Meta:
@@ -91,7 +93,7 @@ class SubjectSerializer(serializers.ModelSerializer):
             if self.instance is not None:
                 qs = qs.exclude(pk=self.instance.pk)
             if qs.exists():
-                raise serializers.ValidationError('شما قبلاً درسی با این نام ثبت کرده‌اید.')
+                raise serializers.ValidationError(_('شما قبلاً درسی با این نام ثبت کرده‌اید.'))
         return value
 
     def to_representation(self, instance):

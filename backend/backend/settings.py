@@ -110,6 +110,10 @@ MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
+    # چندزبانی (از 2026-09-09): زبانِ فعالِ هر درخواست را از هدرِ استانداردِ
+    # Accept-Language تعیین می‌کند (fallback = LANGUAGE_CODE)؛ طبقِ مستندِ جنگو
+    # باید بعد از SessionMiddleware و قبل از CommonMiddleware باشد.
+    'django.middleware.locale.LocaleMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
@@ -296,7 +300,24 @@ AUTH_PASSWORD_VALIDATORS = [
 # Internationalization
 # https://docs.djangoproject.com/en/5.2/topics/i18n/
 
-LANGUAGE_CODE = 'en-us'
+# چندزبانی (از 2026-09-09): پیش‌فرضِ زبان، فارسی است. نکته‌ی طراحی: متنِ
+# اصلیِ پیام‌هایِ اختصاصیِ پروژه فارسی است (نقشِ msgid در gettext)؛ برایِ
+# زبانِ fa کاتالوگی در پروژه وجود ندارد، پس همان متنِ اصلی نمایش داده
+# می‌شود — یعنی رفتارِ پیش‌فرض (و درخواست‌هایِ بدونِ هدرِ Accept-Language)
+# دقیقاً همانِ قبل از چندزبانی‌شدن است. برایِ en، کاتالوگِ
+# locale/en/LC_MESSAGES ترجمه‌ی انگلیسی را می‌دهد. پیام‌هایِ آماده‌ی خودِ
+# DRF/SimpleJWT هم کاتالوگِ fa خودِ کتابخانه‌ها را می‌گیرند (قبلاً انگلیسی
+# بودند؛ حالتِ fa سازگارتر با رابطِ فارسی است).
+LANGUAGE_CODE = 'fa'
+
+# زبان‌های پشتیبانی‌شده — مبنای مذاکره‌ی LocaleMiddleware رویِ Accept-Language
+LANGUAGES = [
+    ('fa', 'Persian'),
+    ('en', 'English'),
+]
+
+# کاتالوگِ ترجمه‌ی خودِ پروژه (فعلاً فقط en؛ fa = متنِ اصلی)
+LOCALE_PATHS = [BASE_DIR / 'locale']
 
 TIME_ZONE = 'UTC'
 

@@ -8,12 +8,23 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script>
+        // چندزبانی (از 2026-09-09): اگر زبانِ ذخیره‌شده «en» باشد، جهتِ صفحه را
+        // پیش از اولین رندر به LTR می‌گذاریم تا چیدمانِ فارسی یک لحظه «فلش» نزند.
+        try {
+            if (localStorage.getItem('ssp_lang') === 'en') {
+                document.documentElement.lang = 'en';
+                document.documentElement.dir = 'ltr';
+            }
+        } catch (e) { /* localStorage در دسترس نیست → همان پیش‌فرضِ فارسی */ }
+    </script>
     <title>ورود | برنامه‌ریز هوشمند مطالعه</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body class="auth-page" data-page="login">
     <div class="auth-card">
         <div class="auth-header">
+            <button type="button" class="ghost-button lang-toggle" id="langToggle">English</button>
             <h1>ورود به حساب</h1>
             <p>برای ادامه، نام کاربری و رمز عبور را وارد کنید.</p>
         </div>
@@ -36,6 +47,7 @@
             </p>
         </form>
     </div>
+    <script src="i18n.js" defer></script>
     <script src="app.js" defer></script>
 </body>
 </html>

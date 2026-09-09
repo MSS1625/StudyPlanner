@@ -19,16 +19,19 @@ README.md، بخش «کارهای آینده»).
 
 from datetime import date, timedelta
 
+# چندزبانی (از 2026-09-09): پیام‌ها و عنوان‌هایِ خروجیِ برنامه با زبانِ فعالِ درخواست ترجمه می‌شوند؛ متنِ اصلی فارسی است (msgid) و کاتالوگِ en ترجمه‌ی انگلیسی را می‌دهد. gettext_lazy برای مقادیرِ سطحِ ماژول (نام روزها) است که باید تا زمانِ رندر ترجمه‌نشده بمانند.
+from django.utils.translation import gettext as _, gettext_lazy
+
 # نام روزهای هفته به ترتیب استاندارد پایتون (دوشنبه = 0 ... یکشنبه = 6)
 # این دیکشنری برای ساختِ عنوانِ فارسیِ هر بلوکِ برنامه (مثل «سه‌شنبه») استفاده می‌شود.
 WEEKDAY_FA = {
-    0: "دوشنبه",
-    1: "سه‌شنبه",
-    2: "چهارشنبه",
-    3: "پنج‌شنبه",
-    4: "جمعه",
-    5: "شنبه",
-    6: "یکشنبه",
+    0: gettext_lazy("دوشنبه"),
+    1: gettext_lazy("سه‌شنبه"),
+    2: gettext_lazy("چهارشنبه"),
+    3: gettext_lazy("پنج‌شنبه"),
+    4: gettext_lazy("جمعه"),
+    5: gettext_lazy("شنبه"),
+    6: gettext_lazy("یکشنبه"),
 }
 
 
@@ -93,7 +96,7 @@ def generate_study_plan(user, daily_available_hours):
 
     # اگر اصلاً امتحانِ آینده‌ای ثبت نشده، برنامه‌ای هم برای ساختن نیست.
     if not exams.exists():
-        return {"message": "هیچ امتحان آینده‌ای برای برنامه‌ریزی وجود ندارد."}
+        return {"message": _("هیچ امتحان آینده‌ای برای برنامه‌ریزی وجود ندارد.")}
 
     # مرحله ۱: محاسبه‌ی «نیاز وزنی» ثابت برای هر امتحان
     # (این مقدار در طول روزهای مختلف تغییر نمی‌کند؛ فقط با گذشتن تاریخِ
@@ -118,7 +121,7 @@ def generate_study_plan(user, daily_available_hours):
 
     # اگر بعد از فیلتر بالا هیچ امتحانِ «فعالی» نماند (مثلاً همه پوشش داده شده‌اند)
     if total_weighted_need == 0:
-        return {"message": "تمام امتحانات پوشش داده شده‌اند یا ساعت مطالعه باقی‌مانده ندارند."}
+        return {"message": _("تمام امتحانات پوشش داده شده‌اند یا ساعت مطالعه باقی‌مانده ندارند.")}
 
     # مرحله ۲: ساخت برنامه برای تک‌تک روزها تا آخرین امتحان
     # سقف ۶۰ روز می‌گذاریم: چون در نهایت فقط «امروز» یا «۷ روز آینده» به
@@ -262,16 +265,24 @@ def format_plan_for_frontend(raw_plan, range_type="daily"):
         if span_days == 1:
             # حالت ساده: فقط یک روز؛ عنوان یا «امروز» است یا نامِ روزِ هفته
             title = (
-                f"امروز - {start.strftime('%Y/%m/%d')}"
+                _('امروز - %(date)s') % {'date': start.strftime('%Y/%m/%d')}
                 if is_today_start
-                else f"{WEEKDAY_FA[start.weekday()]} - {start.strftime('%Y/%m/%d')}"
+                else _('%(weekday)s - %(date)s') % {
+                    'weekday': WEEKDAY_FA[start.weekday()],
+                    'date': start.strftime('%Y/%m/%d'),
+                }
             )
-            hours_badge = f"{per_day_total} ساعت"
+            hours_badge = _('%(hours)s ساعت') % {'hours': per_day_total}
         else:
             # حالتِ ادغام‌شده: عنوان به‌صورت «از روزِ شروع تا روزِ پایان» ساخته می‌شود
-            start_label = "امروز" if is_today_start else WEEKDAY_FA[start.weekday()]
-            title = f"{start_label} تا {WEEKDAY_FA[end.weekday()]} ({start.strftime('%Y/%m/%d')} تا {end.strftime('%Y/%m/%d')})"
-            hours_badge = f"{per_day_total} ساعت در روز"
+            start_label = _('امروز') if is_today_start else WEEKDAY_FA[start.weekday()]
+            title = _('%(start)s تا %(end)s (%(start_date)s تا %(end_date)s)') % {
+                'start': start_label,
+                'end': WEEKDAY_FA[end.weekday()],
+                'start_date': start.strftime('%Y/%m/%d'),
+                'end_date': end.strftime('%Y/%m/%d'),
+            }
+            hours_badge = _('%(hours)s ساعت در روز') % {'hours': per_day_total}
 
         schedule.append({
             "title": title,
@@ -304,7 +315,7 @@ def format_plan_for_frontend(raw_plan, range_type="daily"):
     }
     # اگر بعد از همه‌ی این پردازش، هیچ بلوکی باقی نماند، یک پیامِ توضیحی اضافه کن
     if not schedule:
-        result["message"] = "برای بازه‌ی انتخاب‌شده، برنامه‌ای برای نمایش وجود ندارد."
+        result["message"] = _("برای بازه‌ی انتخاب‌شده، برنامه‌ای برای نمایش وجود ندارد.")
     return result
 
 

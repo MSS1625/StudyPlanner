@@ -29,7 +29,7 @@ django-cors-headers>=4.4
 دو بخشِ کاملاً مجزا که فقط از طریق REST API (JSON روی HTTP) با هم حرف می‌زنند:
 
 - **بک‌اند**: `backend/` — یک پروژه‌ی Django با یک اپلیکیشن (`planner`)
-- **فرانت‌اند**: `static/` — ۷ صفحه‌ی HTML مستقل + یک `app.js` مشترک + یک `styles.css` مشترک
+- **فرانت‌اند**: `static/` — ۷ صفحه‌ی HTML مستقل + یک `app.js` مشترک + یک `i18n.js` مشترک (چندزبانی؛ از 2026-09-09) + یک `styles.css` مشترک
 
 هردو با یک دستور (`python manage.py runserver`) قابل‌اجرا هستند، چون `STATICFILES_DIRS` در `settings.py` پوشه‌ی `static/` را هم زیرِ همان سرور سرو می‌کند (توضیح در README بخش ۱۰).
 
@@ -46,7 +46,7 @@ django-cors-headers>=4.4
 | `utils.py` | **قلبِ الگوریتمی**: `compute_subject_progress`, `generate_study_plan`, `format_plan_for_frontend`, `build_subject_distribution` |
 | `admin.py` | ثبتِ مدل‌ها در پنلِ `/admin/` |
 | `management/commands/seed_demo_data.py` | دستورِ تولیدِ داده‌ی نمونه برای تست |
-| `tests.py` | ۱۰۳ تستِ خودکارِ Django/DRF: هشت کلاسِ API (Auth تا الگوریتم؛ Auth شامل تست‌های تمدیدِ توکن) + کلاسِ `JWTTokenRotationBlacklistTests` (چرخش/لیستِ سیاه/خروجِ سرور-محور) + کلاسِ `PaginationAPITests` (صفحه‌بندیِ اختیاری) + کلاسِ `SettingsEnvVarsTests` (متغیرهایِ محیطیِ Production؛ شاملِ بوتِ واقعیِ مفسرِ جدا) + کلاسِ `StudyPlanUniqueConstraintTests` با `TransactionTestCase` برای قیدِ DB + کلاس‌های `StudyLogConcurrencyLockTests`/`StudyLogOrphanDeleteTests` (قفلِ هم‌زمانیِ select_for_update و حذفِ یتیم؛ نکته‌ی ۶.۱۲) + کلاس‌های `DatabaseUrlSettingsTests`/`PostgresForUpdateTests` (متغیرِ DATABASE_URL + قفلِ FOR UPDATE در PostgreSQL؛ نکته‌ی ۶.۱۳)؛ اجرا با `python manage.py test planner` |
+| `tests.py` | ۱۳۱ تستِ خودکارِ Django/DRF: هشت کلاسِ API (Auth تا الگوریتم؛ Auth شامل تست‌های تمدیدِ توکن) + کلاسِ `JWTTokenRotationBlacklistTests` (چرخش/لیستِ سیاه/خروجِ سرور-محور) + کلاسِ `PaginationAPITests` (صفحه‌بندیِ اختیاری) + کلاسِ `SettingsEnvVarsTests` (متغیرهایِ محیطیِ Production؛ شاملِ بوتِ واقعیِ مفسرِ جدا) + کلاسِ `StudyPlanUniqueConstraintTests` با `TransactionTestCase` برای قیدِ DB + کلاس‌های `StudyLogConcurrencyLockTests`/`StudyLogOrphanDeleteTests` (قفلِ هم‌زمانیِ select_for_update و حذفِ یتیم؛ نکته‌ی ۶.۱۲) + کلاس‌های `DatabaseUrlSettingsTests`/`PostgresForUpdateTests` (متغیرِ DATABASE_URL + قفلِ FOR UPDATE در PostgreSQL؛ نکته‌ی ۶.۱۳) + کلاس‌های `I18nAcceptLanguageTests`/`I18nCatalogIntegrityTests` (ترجمه‌ی پیام‌ها با Accept-Language + سلامتِ کاتالوگِ locale/en؛ نکته‌ی ۶.۱۴)؛ اجرا با `python manage.py test planner` |
 | `migrations/0001` تا `0008` | تاریخچه‌ی واقعیِ تکاملِ اسکیمای دیتابیس (تاریخ‌ها در `CHANGELOG.md`) |
 
 ### فرانت‌اند (`static/`)
@@ -60,6 +60,7 @@ django-cors-headers>=4.4
 | `study_plan.html` | برنامه‌ی مطالعه (`data-page="study-plan"`) |
 | `study_log.html` | ثبتِ مطالعه (`data-page="study-log"`) |
 | `app.js` | تمامِ منطقِ جاوااسکریپتی؛ روترِ سبک بر مبنایِ `data-page` در انتهای فایل |
+| `i18n.js` | زیرساختِ چندزبانیِ فرانت‌اند (از 2026-09-09): دیکشنریِ ۱۷۴ کلیدی + `t()` + `applyI18n()`؛ باید قبل از app.js لود شود (نکته‌ی ۶.۱۴) |
 | `styles.css` | سیستمِ طراحی؛ متغیرهای رنگ/فاصله در بالای فایل (`:root`) |
 
 ## ۵. مدل‌های داده (ساختارِ رابطه‌ای)
@@ -99,6 +100,8 @@ User → StudyPlan (1→N در سطحِ مدل، ولی در عمل هر کار�
 
 ۶.۱۳ **موتورِ دیتابیس فقط از متغیرِ محیطیِ `DATABASE_URL` عوض می‌شود و کد نباید به SQLite گره بخورد.** از 2026-09-09 بخشِ `DATABASES` با تابعِ `_resolve_database()` ساخته می‌شود: بدونِ متغیر = SQLite (رفتارِ قبل)، با `postgres://` = PostgreSQL (درایورِ psycopg). هیچ کدی نباید به `sqlite3` یا فایلِ `db.sqlite3` فرضِ صریح داشته باشد؛ تست‌ها باید روی هر دو موتور سبز بمانند — SQL اختصاصیِ یک موتور باید با `connection.vendor` و `skipUnless` شرطی شود (نمونه‌ها: `PRAGMA foreign_keys` در `StudyLogOrphanDeleteTests` و `FOR UPDATE` در `PostgresForUpdateTests`). ترتیبِ بررسی‌ها در `_resolve_database`: scheme → نامِ دیتابیس → پورت → پارامترهای query → درایور؛ این ترتیب را حفظ کن تا پیام‌هایِ خطا دقیق بمانند.
 
+۶.۱۴ **در چندزبانی، msgid همان «متنِ فارسیِ اصلی» است و رشته‌ی رابطِ جدید باید هم‌زمان در سه جا بیاید.** از 2026-09-09 پیام‌های بک‌اند با `gettext`/`gettext_lazy` پیچیده شده‌اند (`views.py`/`serializers.py`/`utils.py`)، کاتالوگِ انگلیسی در `backend/locale/en/LC_MESSAGES/django.po` است و `django.mo` کامپایل‌شده عمداً commit شده (روی ویندوزِ کاربر msgfmt نیست؛ کامپایل فقط بعد از تغییرِ ترجمه با `scripts/compile_mo.py`). برایِ افزودن/تغییرِ پیام: (۱) متنِ فارسی در کد با `_()`، (۲) کلید/ترجمه در django.po + کامپایلِ مجدد، (۳) برایِ رشته‌ی فرانت‌اند، کلید در دیکشنریِ `static/i18n.js` (کلید = همان متنِ فارسی؛ فارسی خودِ کلید را برمی‌گرداند). `i18n.js` باید در HTML «قبل از» app.js لود شود (t باید قبل از اولین رندر موجود باشد) و app.js هدرِ Accept-Language را می‌فرستد — پیام‌های خطای API با زبانِ کاربر برمی‌گردند. رشته‌های دارایِ متغیر با الگوی `%(name)s` در بک‌اند و `{name}` در فرانت‌اند پارامتری‌اند (ترتیبِ کلمات در ترجمه آزاد). رگرسیون‌تست‌ها: کلاس‌های `I18nAcceptLanguageTests`/`I18nCatalogIntegrityTests` + تستِ Node خارج از ریپو.
+
 ## ۷. Conventions رعایت‌شده در کد
 
 - تمامِ کامنت‌های کد و پیام‌های خطا/UI به **فارسی** نوشته شده‌اند؛ نام‌های متغیر/تابع/کلاس به **انگلیسی**.
@@ -123,7 +126,7 @@ JWT با `djangorestframework-simplejwt`. توکنِ دسترسی: ۱ روز. ت
 | `STATICFILES_DIRS` | `[BASE_DIR.parent / 'static']` | فرانت‌اند را هم سرو می‌کند |
 | `SIMPLE_JWT` | دسترسی ۱ روز / تمدید ۷ روز | چرخش + لیستِ سیاه فعال (از 2026-09-08؛ نکته‌ی ۶.۱۱) |
 
-پیش‌فرض‌ها عمداً «dev-safe»اند: بدونِ ست‌کردنِ هیچ متغیری، همان رفتارِ قبل از 2026-09-06 برقرار است (۱۱۶ تست بدونِ متغیر سبز می‌شوند). فایلِ `.env` هنوز وجود ندارد و کتابخانه‌ی dotenv هم اضافه نشده؛ متغیرها با `set`/`setx` (ویندوز) یا `export` (لینوکس) ست می‌شوند — جدولِ کامل در `README.md` بخشِ ۱۰.
+پیش‌فرض‌ها عمداً «dev-safe»اند: بدونِ ست‌کردنِ هیچ متغیری، همان رفتارِ قبل از 2026-09-06 برقرار است (۱۳۱ تست بدونِ متغیر سبز می‌شوند). فایلِ `.env` هنوز وجود ندارد و کتابخانه‌ی dotenv هم اضافه نشده؛ متغیرها با `set`/`setx` (ویندوز) یا `export` (لینوکس) ست می‌شوند — جدولِ کامل در `README.md` بخشِ ۱۰.
 
 ## ۱۰. فایل‌های مستندات مرتبط
 

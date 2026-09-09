@@ -1,0 +1,118 @@
+# backend/locale/en/LC_MESSAGES/django.po
+# ----------------------------------------------------------------------------
+# کاتالوگِ انگلیسیِ پروژه (از 2026-09-09 — چندزبانی).
+#
+# نکته‌ی معماری: msgid همان «متنِ فارسیِ اصلی» است که در کدِ پایتون
+# (views/serializers/utils با gettext) آمده — یعنی fa (و هر زبانِ بدونِ
+# کاتالوگ) همان متنِ اصلی را می‌بیند و فقط en از این کاتالوگ ترجمه می‌گیرد.
+# ترتیبِ %(name)s در msgstr آزاد است (از интерполяцияِ dict).
+#
+# کامپایل: python ../../../../scripts/compile_mo.py  (django.mo ساخته می‌شود)
+# فایلِ django.mo هم عمداً commit شده است چون ابزارِ msgfmt روی ویندوزِ
+# کاربر در دسترس نیست (تغییرِ ترجمه = به‌روزرسانیِ همین فایل + کامپایلِ مجدد).
+# ----------------------------------------------------------------------------
+msgid ""
+msgstr ""
+"Project-Id-Version: StudyPlanner\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-09-09 12:00+0000\n"
+"Language: en\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+# --- auth (views.py / serializers.py) ---
+msgid "نام کاربری یا رمز عبور اشتباه است"
+msgstr "Incorrect username or password."
+
+msgid "این نام کاربری قبلاً ثبت شده است."
+msgstr "This username is already registered."
+
+msgid "این ایمیل قبلاً ثبت شده است."
+msgstr "This email is already registered."
+
+msgid "شما قبلاً درسی با این نام ثبت کرده‌اید."
+msgstr "You have already registered a subject with this name."
+
+# --- permissions (views.py) ---
+msgid "شما مجاز به ایجاد امتحان برای این درس نیستید"
+msgstr "You are not allowed to create an exam for this subject."
+
+msgid "شما مجاز به تغییرِ درسِ این امتحان نیستید"
+msgstr "You are not allowed to change the subject of this exam."
+
+msgid "شما مجاز به ثبت گزارش مطالعه برای این امتحان نیستید"
+msgstr "You are not allowed to log a study session for this exam."
+
+# --- study plan (views.py) ---
+msgid "تنظیماتِ برنامه‌یِ مطالعه برای این کاربر از قبل موجود است؛ برای تغییر، از generate یا PATCH استفاده کنید."
+msgstr "Study plan settings already exist for this user; use generate or PATCH to change them."
+
+msgid "ساعت مطالعه روزانه الزامی است."
+msgstr "Daily study hours is required."
+
+msgid "ساعت مطالعه باید عددی بین ۰ تا ۲۴ باشد."
+msgstr "Study hours must be a number between 0 and 24."
+
+# --- dashboard (views.py) ---
+msgid "فقط %(days)s روز تا امتحان %(exam)s مانده و %(hours)s ساعت مطالعه باقی است!"
+msgstr "Only %(days)s days left until the %(exam)s exam, with %(hours)s hours of study remaining!"
+
+msgid "%(days)s روز تا امتحان %(exam)s باقی مانده. برنامه‌ات را جدی بگیر."
+msgstr "%(days)s days left until the %(exam)s exam. Take your plan seriously."
+
+msgid "، "
+msgstr ", "
+
+msgid "%(subject)s (%(hours)s ساعت)"
+msgstr "%(subject)s (%(hours)s hours)"
+
+msgid "طبق برنامه‌ی امروز، پیشنهاد می‌شود روی %(tasks)s کار کنی."
+msgstr "According to today's plan, you should focus on %(tasks)s."
+
+# --- planner core (utils.py) ---
+msgid "هیچ امتحان آینده‌ای برای برنامه‌ریزی وجود ندارد."
+msgstr "There are no upcoming exams to plan for."
+
+msgid "تمام امتحانات پوشش داده شده‌اند یا ساعت مطالعه باقی‌مانده ندارند."
+msgstr "All exams are already covered or have no remaining study hours."
+
+msgid "برای بازه‌ی انتخاب‌شده، برنامه‌ای برای نمایش وجود ندارد."
+msgstr "No plan to display for the selected range."
+
+msgid "امروز"
+msgstr "Today"
+
+msgid "امروز - %(date)s"
+msgstr "Today - %(date)s"
+
+msgid "%(hours)s ساعت"
+msgstr "%(hours)s hours"
+
+msgid "%(hours)s ساعت در روز"
+msgstr "%(hours)s hours per day"
+
+msgid "%(start)s تا %(end)s (%(start_date)s تا %(end_date)s)"
+msgstr "%(start)s to %(end)s (%(start_date)s to %(end_date)s)"
+
+# --- روزهای هفته (utils.py — WEEKDAY_FA) ---
+msgid "دوشنبه"
+msgstr "Monday"
+
+msgid "سه‌شنبه"
+msgstr "Tuesday"
+
+msgid "چهارشنبه"
+msgstr "Wednesday"
+
+msgid "پنج‌شنبه"
+msgstr "Thursday"
+
+msgid "جمعه"
+msgstr "Friday"
+
+msgid "شنبه"
+msgstr "Saturday"
+
+msgid "یکشنبه"
+msgstr "Sunday"

@@ -87,6 +87,10 @@ const apiRequest = async (
     const token = getToken();
 
     const finalHeaders = { ...headers };
+    // چندزبانی (از 2026-09-09): زبانِ انتخابیِ کاربر به سرور هم اعلام می‌شود
+    // تا پیام‌های خطای API (که gettext دارند) با همان زبان برگردند؛
+    // Accept-Language جزو هدرهایِ safelistشده‌ی CORS است (preflight اضافه نمی‌سازد).
+    finalHeaders['Accept-Language'] = currentLang() === 'en' ? 'en' : 'fa';
     // اگر توکن داریم و این درخواست نیاز به احراز هویت دارد (اکثرِ درخواست‌ها)،
     // آن را در هدرِ استاندارد Authorization: Bearer <token> می‌گذاریم.
     if (!skipAuth && token) {
@@ -135,12 +139,12 @@ const apiRequest = async (
                 }
             }
             forceLogoutExpired();
-            throw new Error('نشست شما منقضی شده است؛ لطفاً دوباره وارد شوید.');
+            throw new Error(t('نشست شما منقضی شده است؛ لطفاً دوباره وارد شوید.'));
         }
 
         // اگر پاسخ کدِ خطا داشت (400/401/403/...)، سعی می‌کنیم مناسب‌ترین پیامِ
         // خطا را از بین شکل‌های مختلفی که DRF ممکن است برگرداند پیدا کنیم:
-        let message = 'خطایی رخ داده است.';
+        let message = t('خطایی رخ داده است.');
         if (data?.detail) {
             message = data.detail;
         } else if (data?.message) {
@@ -269,7 +273,9 @@ const updateUserGreeting = () => {
     const label = document.querySelector(selectors.userGreeting);
     if (!label) return;
     const username = getStoredUsername();
-    label.textContent = username ? `👋 سلام، ${username}` : 'سلام دوست عزیز';
+    label.textContent = username
+        ? t('👋 سلام، {username}', { username })
+        : t('سلام دوست عزیز');
 };
 
 // به‌روزرسانیِ نشانگرِ کوچکِ وضعیت (آنلاین/در حال پردازش/خارج از سیستم) در سایدبار
@@ -279,7 +285,7 @@ const updateStatusIndicator = (status = 'online') => {
     if (!statusText || !dot) return;
 
     if (!getToken()) {
-        statusText.textContent = 'خارج از سیستم';
+        statusText.textContent = t('خارج از سیستم');
         dot.style.background = '#9ca3af';
         dot.style.boxShadow = '0 0 0 6px rgba(156, 163, 175, 0.25)';
         return;
@@ -287,17 +293,17 @@ const updateStatusIndicator = (status = 'online') => {
 
     switch (status) {
         case 'online':
-            statusText.textContent = 'آنلاین';
+            statusText.textContent = t('آنلاین');
             dot.style.background = '#22c55e';
             dot.style.boxShadow = '0 0 0 6px rgba(34, 197, 94, 0.25)';
             break;
         case 'busy':
-            statusText.textContent = 'در حال پردازش...';
+            statusText.textContent = t('در حال پردازش...');
             dot.style.background = '#facc15';
             dot.style.boxShadow = '0 0 0 6px rgba(250, 204, 21, 0.25)';
             break;
         default:
-            statusText.textContent = 'نامشخص';
+            statusText.textContent = t('نامشخص');
             dot.style.background = '#9ca3af';
             dot.style.boxShadow = '0 0 0 6px rgba(156, 163, 175, 0.25)';
     }
@@ -395,7 +401,7 @@ const renderDashboard = (data) => {
         progressList.innerHTML = '';
         const subjects = data?.subjects_progress ?? [];
         if (!subjects.length) {
-            progressList.innerHTML = `<p class="empty-state">درسی ثبت نشده است.</p>`;
+            progressList.innerHTML = `<p class="empty-state">${t('درسی ثبت نشده است.')}</p>`;
         } else {
             subjects.forEach((subject) => {
                 const row = document.createElement('div');
@@ -403,8 +409,8 @@ const renderDashboard = (data) => {
                 row.innerHTML = `
                     <h4>${escapeHtml(subject.name)}</h4>
                     <div class="progress-meta">
-                        <span>سختی: ${subject.difficulty}/5</span>
-                        <span>${subject.completed_hours} از ${subject.total_hours} ساعت</span>
+                        <span>${t('سختی: {difficulty}/5', { difficulty: subject.difficulty })}</span>
+                        <span>${t('{completed} از {total} ساعت', { completed: subject.completed_hours, total: subject.total_hours })}</span>
                     </div>
                     <div class="progress-bar">
                         <span style="width: ${subject.progress_percent}%"></span>
@@ -421,15 +427,15 @@ const renderDashboard = (data) => {
         timeline.innerHTML = '';
         const exams = data?.upcoming_exams ?? [];
         if (!exams.length) {
-            timeline.innerHTML = `<p class="empty-state">امتحان ثبت نشده است.</p>`;
+            timeline.innerHTML = `<p class="empty-state">${t('امتحان ثبت نشده است.')}</p>`;
         } else {
             exams.forEach((exam) => {
                 const item = document.createElement('div');
                 item.className = 'timeline-item';
                 item.innerHTML = `
                     <strong>${escapeHtml(exam.subject_name)}</strong>
-                    <span>${exam.exam_date} • ${exam.remaining_days} روز باقی‌مانده</span>
-                    <span>ساعت باقی‌مانده: ${exam.remaining_hours}</span>
+                    <span>${exam.exam_date} • ${t('{days} روز باقی‌مانده', { days: exam.remaining_days })}</span>
+                    <span>${t('ساعت باقی‌مانده: {hours}', { hours: exam.remaining_hours })}</span>
                 `;
                 timeline.appendChild(item);
             });
@@ -443,7 +449,7 @@ const renderDashboard = (data) => {
         alertsList.innerHTML = '';
         const alerts = data?.alerts ?? [];
         if (!alerts.length) {
-            alertsList.innerHTML = `<p class="empty-state">هشداری وجود ندارد.</p>`;
+            alertsList.innerHTML = `<p class="empty-state">${t('هشداری وجود ندارد.')}</p>`;
         } else {
             alerts.forEach((alert) => {
                 const item = document.createElement('div');
@@ -470,7 +476,7 @@ const renderDashboard = (data) => {
             ? data.study_distribution
             : [];
         if (!dist.length) {
-            distribution.innerHTML = `<p class="empty-state">داده‌ای برای نمایش نمودار وجود ندارد.</p>`;
+            distribution.innerHTML = `<p class="empty-state">${t('داده‌ای برای نمایش نمودار وجود ندارد.')}</p>`;
         } else {
             distribution.innerHTML = '';
             dist.forEach((entry) => {
@@ -478,7 +484,7 @@ const renderDashboard = (data) => {
                 bar.className = 'mini-bar';
                 // حداقل ۶٪ ارتفاع می‌گذاریم تا حتی مقادیرِ خیلی کوچک هم دیده شوند
                 bar.style.height = `${Math.max(entry.percent, 6)}%`;
-                bar.title = `${entry.label}: ${entry.hours ?? 0} ساعت در هفته‌ی پیش‌رو`;
+                bar.title = t('{label}: {hours} ساعت در هفته‌ی پیش‌رو', { label: entry.label, hours: entry.hours ?? 0 });
                 bar.innerHTML = `<span>${escapeHtml(entry.label)}</span>`;
                 distribution.appendChild(bar);
             });
@@ -515,7 +521,7 @@ const sortSubjects = (subjects, key) => {
                 (a, b) => b.progress_percent - a.progress_percent,
             );
         default:
-            return sorted.sort((a, b) => a.name.localeCompare(b.name, 'fa'));
+            return sorted.sort((a, b) => a.name.localeCompare(b.name, currentLang()));
     }
 };
 
@@ -525,7 +531,7 @@ const renderSubjects = (subjects) => {
     tbody.innerHTML = '';
 
     if (!subjects.length) {
-        tbody.innerHTML = `<tr><td colspan="5" class="empty-state">درسی هنوز ثبت نشده است.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="5" class="empty-state">${t('درسی هنوز ثبت نشده است.')}</td></tr>`;
         return;
     }
 
@@ -568,9 +574,9 @@ const populateSubjectSelect = async () => {
     if (!select) return;
     try {
         const subjects = await apiGet(endpoints.subjects);
-        select.innerHTML = `<option value="" disabled selected>ابتدا درس را انتخاب کنید</option>`;
+        select.innerHTML = `<option value="" disabled selected>${t('ابتدا درس را انتخاب کنید')}</option>`;
         if (!subjects.length) {
-            select.innerHTML = `<option value="" disabled>لطفاً ابتدا درسی ثبت کنید</option>`;
+            select.innerHTML = `<option value="" disabled>${t('لطفاً ابتدا درسی ثبت کنید')}</option>`;
             return;
         }
         subjects.forEach((subject) => {
@@ -580,7 +586,7 @@ const populateSubjectSelect = async () => {
             select.appendChild(option);
         });
     } catch (error) {
-        showToast('بارگذاری درس‌ها با خطا مواجه شد.', 'error');
+        showToast(t('بارگذاری درس‌ها با خطا مواجه شد.'), 'error');
     }
 };
 
@@ -591,7 +597,7 @@ const renderExams = (exams) => {
 
     if (exams.length === 0) {
         tbody.innerHTML =
-            "<tr><td colspan='6' class='text-center'>هیچ امتحانی یافت نشد.</td></tr>";
+            `<tr><td colspan='6' class='text-center'>${t('هیچ امتحانی یافت نشد.')}</td></tr>`;
         return;
     }
 
@@ -606,21 +612,21 @@ const renderExams = (exams) => {
 
         let daysText = '';
         if (diffDays > 0) {
-            daysText = `${diffDays} روز باقی‌مانده`;
+            daysText = t('{days} روز باقی‌مانده', { days: diffDays });
         } else if (diffDays === 0) {
-            daysText = 'امروز!';
+            daysText = t('امروز!');
         } else {
-            daysText = 'گذشته';
+            daysText = t('گذشته');
         }
 
         // برچسبِ اهمیت/فوریتِ امتحان، صرفاً برای نمایشِ بصریِ سریع در جدول
-        let importanceLabel = 'کم';
+        let importanceLabel = t('کم');
         if (diffDays >= 0 && diffDays <= 3) {
-            importanceLabel = 'خیلی زیاد 🔴';
+            importanceLabel = t('خیلی زیاد 🔴');
         } else if (diffDays > 3 && diffDays <= 7) {
-            importanceLabel = 'متوسط 🟡';
+            importanceLabel = t('متوسط 🟡');
         } else if (diffDays > 7) {
-            importanceLabel = 'کم 🟢';
+            importanceLabel = t('کم 🟢');
         }
 
         // یادداشتِ امتحان (اگر باشد) به‌صورتِ زیرنویسِ کم‌رنگ زیرِ نام درس —
@@ -633,9 +639,9 @@ const renderExams = (exams) => {
         row.innerHTML = `
             <td>${escapeHtml(exam.subject_name ?? String(exam.subject ?? ''))}${notesMarkup}</td>
             <td>${exam.exam_date} <br> <small class="text-muted">${daysText}</small></td>
-            <td>${exam.study_hours_remaining ?? 0} ساعت</td>
+            <td>${t('{hours} ساعت', { hours: exam.study_hours_remaining ?? 0 })}</td>
             <td>${importanceLabel}</td>
-            <td>${diffDays < 0 ? 'پایان یافته' : 'برنامه‌ریزی نشده'}</td>
+            <td>${diffDays < 0 ? t('پایان یافته') : t('برنامه‌ریزی نشده')}</td>
             <td></td>
         `;
 
@@ -646,8 +652,8 @@ const renderExams = (exams) => {
         editBtn.type = 'button';
         // btn-edit: دکمه‌ی قرصیِ مخصوصِ سطحِ سفیدِ جدول — آیکونِ مداد با CSS mask
         editBtn.className = 'btn-edit';
-        editBtn.title = 'ویرایش این امتحان';
-        editBtn.textContent = 'ویرایش';
+        editBtn.title = t('ویرایش این امتحان');
+        editBtn.textContent = t('ویرایش');
         editBtn.addEventListener('click', () => startExamEdit(exam));
         actionsTd.appendChild(editBtn);
 
@@ -676,10 +682,10 @@ const startExamEdit = (exam) => {
     if (cancelBtn) cancelBtn.style.display = '';
 
     const submitBtn = form.querySelector('button[type="submit"]');
-    if (submitBtn) submitBtn.textContent = 'به‌روزرسانی امتحان';
+    if (submitBtn) submitBtn.textContent = t('به‌روزرسانی امتحان');
 
     const panelTitle = document.getElementById('examFormTitle');
-    if (panelTitle) panelTitle.textContent = 'ویرایش امتحان';
+    if (panelTitle) panelTitle.textContent = t('ویرایش امتحان');
 
     // جدول پایینِ فرم است؛ کاربر را به فرمِ پرشده ببریم تا تغییرات را ببیند
     form.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -719,22 +725,22 @@ const populateExamSelectForLog = async () => {
         );
 
         if (!sorted.length) {
-            select.innerHTML = `<option value="" disabled selected>ابتدا یک امتحان ثبت کنید</option>`;
+            select.innerHTML = `<option value="" disabled selected>${t('ابتدا یک امتحان ثبت کنید')}</option>`;
             return;
         }
 
-        select.innerHTML = `<option value="" disabled selected>یک امتحان را انتخاب کنید</option>`;
+        select.innerHTML = `<option value="" disabled selected>${t('یک امتحان را انتخاب کنید')}</option>`;
         sorted.forEach((exam) => {
             const option = document.createElement('option');
             option.value = exam.id;
             const remaining = exam.study_hours_remaining ?? 0;
             const remainingText =
-                remaining > 0 ? `${remaining} ساعت باقی‌مانده` : 'کامل شده ✅';
+                remaining > 0 ? t('{hours} ساعت باقی‌مانده', { hours: remaining }) : t('کامل شده ✅');
             option.textContent = `${exam.subject_name ?? exam.subject} — ${exam.exam_date} (${remainingText})`;
             select.appendChild(option);
         });
     } catch (error) {
-        showToast('بارگذاری امتحان‌ها با خطا مواجه شد.', 'error');
+        showToast(t('بارگذاری امتحان‌ها با خطا مواجه شد.'), 'error');
     }
 };
 
@@ -744,7 +750,7 @@ const renderStudyLogs = (logs) => {
     tbody.innerHTML = '';
 
     if (!logs.length) {
-        tbody.innerHTML = `<tr><td colspan="5" class="empty-state">هنوز هیچ گزارش مطالعه‌ای ثبت نشده است.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="5" class="empty-state">${t('هنوز هیچ گزارش مطالعه‌ای ثبت نشده است.')}</td></tr>`;
         return;
     }
 
@@ -753,9 +759,9 @@ const renderStudyLogs = (logs) => {
         row.innerHTML = `
             <td>${escapeHtml(log.exam_name ?? '-')}</td>
             <td>${log.date}</td>
-            <td>${log.hours_studied} ساعت</td>
+            <td>${t('{hours} ساعت', { hours: log.hours_studied })}</td>
             <td>${log.notes ? escapeHtml(log.notes) : '-'}</td>
-            <td><button type="button" class="btn-danger-sm" data-log-id="${log.id}">حذف</button></td>
+            <td><button type="button" class="btn-danger-sm" data-log-id="${log.id}">${t('حذف')}</button></td>
         `;
         tbody.appendChild(row);
     });
@@ -786,13 +792,13 @@ const deleteStudyLog = async (id) => {
     // جلوگیری از حذفِ ناخواسته، تأیید می‌گیریم.
     if (
         !confirm(
-            'این گزارش مطالعه حذف شود؟ ساعتِ مطالعه‌ی آن به امتحانِ مربوطه برمی‌گردد.',
+            t('این گزارش مطالعه حذف شود؟ ساعتِ مطالعه‌ی آن به امتحانِ مربوطه برمی‌گردد.'),
         )
     )
         return;
     try {
         await apiDelete(endpoints.studyLogDetail(id));
-        showToast('گزارش مطالعه حذف شد و ساعتِ آن به امتحان برگشت.', 'success');
+        showToast(t('گزارش مطالعه حذف شد و ساعتِ آن به امتحان برگشت.'), 'success');
         await loadStudyLogs();
         // متنِ «X ساعت باقی‌مانده» کنارِ گزینه‌های کشویِ امتحان‌ها هم باید
         // با ساعتِ برگشته به‌روز شود، وگرنه تا رفرشِ بعدی عددِ قدیمی می‌ماند
@@ -824,7 +830,7 @@ const handleStudyLogForm = () => {
             data.hours_studied <= 0
         ) {
             showToast(
-                'لطفاً امتحان، تاریخ و ساعت مطالعه را درست وارد کنید.',
+                t('لطفاً امتحان، تاریخ و ساعت مطالعه را درست وارد کنید.'),
                 'error',
             );
             return;
@@ -832,7 +838,7 @@ const handleStudyLogForm = () => {
 
         try {
             await apiPost(endpoints.studyLogs, data);
-            showToast('آفرین! گزارش مطالعه ثبت شد. 🎉', 'success');
+            showToast(t('آفرین! گزارش مطالعه ثبت شد. 🎉'), 'success');
             form.reset();
             // بعد از ثبت، تاریخ را دوباره روی «امروز» می‌گذاریم (چون form.reset آن را خالی می‌کند)
             const dateInput = document.getElementById('logDate');
@@ -883,9 +889,9 @@ const renderPlan = (plan) => {
     if (!items.length) {
         // پیامِ خودِ بک‌اند (مثلاً «هیچ امتحان آینده‌ای وجود ندارد») را نشان بده،
         // یا اگر نبود، یک پیامِ عمومی
-        container.innerHTML = `<p class="empty-state">${escapeHtml(plan?.message ?? 'داده‌ای برای نمایش وجود ندارد.')}</p>`;
+        container.innerHTML = `<p class="empty-state">${escapeHtml(plan?.message ?? t('داده‌ای برای نمایش وجود ندارد.'))}</p>`;
         const total = document.getElementById('totalRecommended');
-        if (total) total.textContent = '0 ساعت';
+        if (total) total.textContent = t('0 ساعت');
         const daily = document.getElementById('averageDaily');
         if (daily) daily.textContent = '0';
         const priority = document.getElementById('prioritySubjects');
@@ -900,12 +906,12 @@ const renderPlan = (plan) => {
         // کوچک («۴ روز») کنارِ عنوان نشان بده
         const daysChip =
             entry.days_covered > 1
-                ? `<span class="plan-days-chip">${entry.days_covered} روز</span>`
+                ? `<span class="plan-days-chip">${t('{days} روز', { days: entry.days_covered })}</span>`
                 : '';
         block.innerHTML = `
             <div class="plan-header">
                 <h4>${escapeHtml(entry.title)} ${daysChip}</h4>
-                <span class="plan-hours">${escapeHtml(entry.hours_badge ?? `${entry.total_hours ?? 0} ساعت`)}</span>
+                <span class="plan-hours">${escapeHtml(entry.hours_badge ?? t('{hours} ساعت', { hours: entry.total_hours ?? 0 }))}</span>
             </div>
         `;
         const tasksWrapper = document.createElement('div');
@@ -916,7 +922,7 @@ const renderPlan = (plan) => {
             taskRow.className = 'plan-task';
             taskRow.innerHTML = `
                 <strong>${escapeHtml(task.subject)}</strong>
-                <span>${task.hours} ساعت</span>
+                <span>${t('{hours} ساعت', { hours: task.hours })}</span>
             `;
             tasksWrapper.appendChild(taskRow);
         });
@@ -928,7 +934,7 @@ const renderPlan = (plan) => {
     // خلاصه‌ی پایینِ صفحه: مجموع ساعات پیشنهادی، میانگین روزانه و پرکارترین درس‌ها
     const total = document.getElementById('totalRecommended');
     if (total)
-        total.textContent = `${plan?.totals?.recommended_hours ?? 0} ساعت`;
+        total.textContent = t('{hours} ساعت', { hours: plan?.totals?.recommended_hours ?? 0 });
 
     const daily = document.getElementById('averageDaily');
     if (daily) daily.textContent = plan?.totals?.average_daily ?? 0;
@@ -973,7 +979,7 @@ const handleLogin = () => {
     // اگر کاربر به‌خاطرِ انقضای نشست به این صفحه آمده باشد (?expired=1)،
     // یک توضیحِ کوتاه نشان بده تا معلوم شود چرا وسطِ کار بیرون افتاد.
     if (new URLSearchParams(window.location.search).get('expired')) {
-        showToast('نشست شما منقضی شده بود؛ لطفاً دوباره وارد شوید.', 'info');
+        showToast(t('نشست شما منقضی شده بود؛ لطفاً دوباره وارد شوید.'), 'info');
     }
 
     form.addEventListener('submit', async (event) => {
@@ -982,7 +988,7 @@ const handleLogin = () => {
         const password = form.password.value;
 
         if (!username || !password) {
-            showToast('لطفاً همه فیلدها را کامل کنید.', 'error');
+            showToast(t('لطفاً همه فیلدها را کامل کنید.'), 'error');
             return;
         }
 
@@ -998,7 +1004,7 @@ const handleLogin = () => {
             // توکنِ دسترسی، apiRequest بی‌صدا همین توکن را برایِ تمدید می‌فرستد.
             if (data.refresh) setRefreshToken(data.refresh);
             setStoredUsername(username);
-            showToast('ورود موفقیت‌آمیز بود.', 'success');
+            showToast(t('ورود موفقیت‌آمیز بود.'), 'success');
             window.location.href = 'index.html';
         } catch (error) {
             showToast(error.message, 'error');
@@ -1020,12 +1026,12 @@ const handleRegister = () => {
             // اضافه شدن { skipAuth: true } که جا افتاده بود
             await apiPost(endpoints.register, data, { skipAuth: true });
 
-            showToast('ثبت‌نام با موفقیت انجام شد!', 'success');
+            showToast(t('ثبت‌نام با موفقیت انجام شد!'), 'success');
 
             // بعد از ثبت‌نامِ موفق، دکمه‌ی فرم را تبدیل به یک لینکِ «ورود به حساب» می‌کنیم
             const actionBtn = document.getElementById('authActionBtn');
             if (actionBtn) {
-                actionBtn.textContent = 'ورود به حساب';
+                actionBtn.textContent = t('ورود به حساب');
                 actionBtn.type = 'button';
                 actionBtn.classList.add('success-button');
 
@@ -1041,7 +1047,7 @@ const handleRegister = () => {
         } catch (error) {
             console.error('Error:', error);
             showToast(
-                error.message || 'خطا در ثبت‌نام. لطفا دوباره تلاش کنید.',
+                error.message || t('خطا در ثبت‌نام. لطفا دوباره تلاش کنید.'),
                 'error',
             );
         }
@@ -1071,13 +1077,13 @@ const handleSubjectForm = () => {
         };
 
         if (!formData.name) {
-            showToast('لطفاً نام درس را وارد کنید.', 'error');
+            showToast(t('لطفاً نام درس را وارد کنید.'), 'error');
             return;
         }
 
         try {
             await apiPost(endpoints.subjects, formData);
-            showToast('درس با موفقیت اضافه شد.', 'success');
+            showToast(t('درس با موفقیت اضافه شد.'), 'success');
             form.reset();
             await loadSubjects(
                 document.getElementById('subjectSort')?.value ?? 'name',
@@ -1103,10 +1109,10 @@ const resetExamForm = () => {
     if (cancelBtn) cancelBtn.style.display = 'none';
 
     const submitBtn = form?.querySelector('button[type="submit"]');
-    if (submitBtn) submitBtn.textContent = 'ذخیره امتحان';
+    if (submitBtn) submitBtn.textContent = t('ذخیره امتحان');
 
     const panelTitle = document.getElementById('examFormTitle');
-    if (panelTitle) panelTitle.textContent = 'ثبت امتحان یا ددلاین';
+    if (panelTitle) panelTitle.textContent = t('ثبت امتحان یا ددلاین');
 };
 
 const handleExamForm = () => {
@@ -1138,17 +1144,17 @@ const handleExamForm = () => {
             isNaN(data.chapters_remaining) ||
             isNaN(data.study_hours_remaining)
         ) {
-            showToast('لطفاً فیلدهای ضروری را کامل کنید.', 'error');
+            showToast(t('لطفاً فیلدهای ضروری را کامل کنید.'), 'error');
             return;
         }
 
         try {
             if (examId) {
                 await apiPatch(endpoints.examDetail(examId), data);
-                showToast('امتحان با موفقیت به‌روزرسانی شد.', 'success');
+                showToast(t('امتحان با موفقیت به‌روزرسانی شد.'), 'success');
             } else {
                 await apiPost(endpoints.exams, data);
-                showToast('امتحان با موفقیت ثبت شد.', 'success');
+                showToast(t('امتحان با موفقیت ثبت شد.'), 'success');
             }
             // در هر دو حالت (ثبتِ جدید یا ویرایش) فرم به حالتِ اولیه برمی‌گردد
             resetExamForm();
@@ -1223,7 +1229,7 @@ const handleDailyHoursForm = () => {
 
         if (!dailyHours || dailyHours <= 0 || dailyHours > 24) {
             showToast(
-                'ساعت مطالعه روزانه باید عددی بین ۱ تا ۲۴ باشد.',
+                t('ساعت مطالعه روزانه باید عددی بین ۱ تا ۲۴ باشد.'),
                 'error',
             );
             return;
@@ -1234,7 +1240,7 @@ const handleDailyHoursForm = () => {
             await apiPost(endpoints.studyPlanGenerate, {
                 daily_available_hours: dailyHours,
             });
-            showToast('برنامه مطالعه به‌روزرسانی شد.', 'success');
+            showToast(t('برنامه مطالعه به‌روزرسانی شد.'), 'success');
             // بعد از تولیدِ مجدد، برنامه را دوباره برای همان بازه‌ای که کاربر
             // در حالِ مشاهده‌اش بود (روزانه یا هفتگی) بارگذاری می‌کنیم
             await loadStudyPlan(getActiveRange());
