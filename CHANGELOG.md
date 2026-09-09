@@ -204,6 +204,23 @@
 *(مایگریشنِ داخلِ ریپو ندارد؛ ولی migrate لازم است — اپِ token_blacklist جدول‌های خودش را در دیتابیسِ موجود می‌سازد. توکن‌های Refreshِ صادرشده‌ی قبل از این تغییر هم بدونِ مشکل کار می‌کنند و اولین تمدیدشان آن‌ها را واردِ چرخه‌ی ثبت/ابطال می‌کند.)*
 
 
+### 2026-09-09 — پشتیبانیِ PostgreSQL از طریقِ DATABASE_URL (پیش‌فرضِ امنِ توسعه: SQLite)
+
+**Added**
+
+- متغیرِ محیطیِ `DATABASE_URL`: بدونِ این متغیر هیچ چیز عوض نمی‌شود (همان SQLiteِ توسعه)؛ با آدرسِ `postgres://user:pass@host:port/dbname` موتور به PostgreSQL عوض می‌شود — «جایگزینیِ SQLite با PostgreSQL» از TODO حالا یک قابلیتِ آماده است و قفلِ `FOR UPDATE`ِ همان روز در PostgreSQL واقعاً فعال می‌شود (رگرسیون‌تستِ جدید SQL را بررسی می‌کند). پارامترهایِ اختیاریِ انتهایِ URL: `?sslmode=require`، `?conn_max_age=60` و `?host=/var/run/postgresql` (سوکتِ یونیکس). رمزِ دارایِ کاراکترِ خاص باید URL-encode شود (`@` → `%40`).
+- درایورِ `psycopg[binary]` (نسخه‌ی ۳) به `requirements.txt` اضافه شد — نصب: `pip install -r requirements.txt`؛ اگر متغیر ست شده باشد ولی درایور نصب نباشد، بوت با پیامِ راهنمایِ نصب متوقف می‌شود (`ImproperlyConfigured`)، نه با خطایِ مبهمِ وسطِ اولین کوئری.
+- هشدارِ یک‌خطی: `DJANGO_DEBUG=false` بدونِ `DATABASE_URL` روی stderr یادآوری می‌کند که Production روی SQLite است (برایِ دمو/دفاع قابل‌قبول، برایِ چندکاربره نه) — بوت متوقف نمی‌شود.
+- ۱۳ تستِ جدید (مجموع ۱۰۳ → ۱۱۶): کلاسِ `DatabaseUrlSettingsTests` — پیش‌فرضِ SQLiteِ دست‌نخورده، پارسِ کاملِ URL (user/pass/host/port/name با URL-decode)، پارامترهایِ query، ردِ schemeِ نامعتبر/پورتِ غیر عددی/نبودِ نامِ دیتابیس/conn_max_age غیر عددی، نبودِ درایور (یک‌بار با تزریقِ importِ شکسته و یک‌بار با بوتِ واقعیِ مفسرِ جدا + ماژولِ سایه‌ی psycopg)، بوتِ واقعیِ هر دو حالت، و هشدارِ Production-روی-SQLite؛ به‌علاوه‌ی کلاسِ `PostgresForUpdateTests` — رگرسیونِ «FOR UPDATE در SQL» که فقط وقتی موتورِ فعال PostgreSQL است اجرا می‌شود (در SQLite skip؛ پوششِ رفتاری‌اش در کلاس‌های قبل است). تستِ یتیمِ PRAGMA هم شرطیِ موتور گرفت تا کلِ مجموعه روی PostgreSQL هم سبز شود — و شد: ۱۱۶/۱۱۶ روی هر دو موتور.
+
+**Changed**
+
+- `DATABASES` در `settings.py` حالا با تابعِ `_resolve_database()` ساخته می‌شود — ترتیبِ بررسی: scheme → نامِ دیتابیس → پورت → پارامترهای query → درایور؛ هر خطا همان بوت با پیامِ راهنما متوقف می‌شود. مقدارِ پیش‌فرضِ `ENGINE`/`NAME` دقیقاً همانِ قبلی است (رگرسیون‌تست دارد).
+- `StudyLogOrphanDeleteTests` فقط روی SQLite اجرا می‌شود (ساختِ یتیم با `PRAGMA foreign_keys` مخصوصِ SQLite است).
+
+*(مایگریشن و migrate ندارد — اسکیما دست‌نخورده ماند و `makemigrations --check` پاک است. کلِ مجموعه‌ی ۱۱۶تایی هم روی SQLite و هم روی PostgreSQL واقعی سبز شده است.)*
+
+
 ### 2026-09-09 — قفلِ هم‌زمانیِ گزارشِ مطالعه: select_for_update + خواندنِ تازه
 
 **Changed**

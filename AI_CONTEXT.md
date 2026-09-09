@@ -46,7 +46,7 @@ django-cors-headers>=4.4
 | `utils.py` | **قلبِ الگوریتمی**: `compute_subject_progress`, `generate_study_plan`, `format_plan_for_frontend`, `build_subject_distribution` |
 | `admin.py` | ثبتِ مدل‌ها در پنلِ `/admin/` |
 | `management/commands/seed_demo_data.py` | دستورِ تولیدِ داده‌ی نمونه برای تست |
-| `tests.py` | ۱۰۳ تستِ خودکارِ Django/DRF: هشت کلاسِ API (Auth تا الگوریتم؛ Auth شامل تست‌های تمدیدِ توکن) + کلاسِ `JWTTokenRotationBlacklistTests` (چرخش/لیستِ سیاه/خروجِ سرور-محور) + کلاسِ `PaginationAPITests` (صفحه‌بندیِ اختیاری) + کلاسِ `SettingsEnvVarsTests` (متغیرهایِ محیطیِ Production؛ شاملِ بوتِ واقعیِ مفسرِ جدا) + کلاسِ `StudyPlanUniqueConstraintTests` با `TransactionTestCase` برای قیدِ DB + کلاس‌های `StudyLogConcurrencyLockTests`/`StudyLogOrphanDeleteTests` (قفلِ هم‌زمانیِ select_for_update و حذفِ یتیم؛ نکته‌ی ۶.۱۲)؛ اجرا با `python manage.py test planner` |
+| `tests.py` | ۱۰۳ تستِ خودکارِ Django/DRF: هشت کلاسِ API (Auth تا الگوریتم؛ Auth شامل تست‌های تمدیدِ توکن) + کلاسِ `JWTTokenRotationBlacklistTests` (چرخش/لیستِ سیاه/خروجِ سرور-محور) + کلاسِ `PaginationAPITests` (صفحه‌بندیِ اختیاری) + کلاسِ `SettingsEnvVarsTests` (متغیرهایِ محیطیِ Production؛ شاملِ بوتِ واقعیِ مفسرِ جدا) + کلاسِ `StudyPlanUniqueConstraintTests` با `TransactionTestCase` برای قیدِ DB + کلاس‌های `StudyLogConcurrencyLockTests`/`StudyLogOrphanDeleteTests` (قفلِ هم‌زمانیِ select_for_update و حذفِ یتیم؛ نکته‌ی ۶.۱۲) + کلاس‌های `DatabaseUrlSettingsTests`/`PostgresForUpdateTests` (متغیرِ DATABASE_URL + قفلِ FOR UPDATE در PostgreSQL؛ نکته‌ی ۶.۱۳)؛ اجرا با `python manage.py test planner` |
 | `migrations/0001` تا `0008` | تاریخچه‌ی واقعیِ تکاملِ اسکیمای دیتابیس (تاریخ‌ها در `CHANGELOG.md`) |
 
 ### فرانت‌اند (`static/`)
@@ -97,6 +97,8 @@ User → StudyPlan (1→N در سطحِ مدل، ولی در عمل هر کار�
 
 ۶.۱۲ **کسر/بازگشتِ ساعتِ امتحان باید رویِ سطرِ «قفل‌شده و تازه‌خوانده‌شده» انجام شود.** از 2026-09-09 `StudyLog.save()`/`delete()` امتحان را داخلِ تراکنشِ اتمیک با `Exam.objects.select_for_update().get(pk=...)` می‌خوانند و کم/زیادکردنِ ساعت رویِ همان نمونه‌یِ تازه انجام می‌شود — نه رویِ `self.exam` یا snapshotِ کش‌شده (مثلِ `select_related` از ابتدایِ درخواست)؛ وگرنه Lost Update برمی‌گردد (رگرسیون‌تست‌ها: کلاسِ `StudyLogConcurrencyLockTests`). ترتیبِ قفل در هر دو متد «اول امتحان، بعد گزارش» است تا Deadlock نگیرد؛ ویرایشِ گزارش (pk دارد) عمداً قفل نمی‌گیرد و ساعت کسر نمی‌کند. در SQLite قفلِ FOR UPDATE بی‌صدا نادیده گرفته می‌شود (خواندنِ تازه همچنان مؤثر است)؛ قفلِ واقعی در PostgreSQL/MySQL فعال می‌شود.
 
+۶.۱۳ **موتورِ دیتابیس فقط از متغیرِ محیطیِ `DATABASE_URL` عوض می‌شود و کد نباید به SQLite گره بخورد.** از 2026-09-09 بخشِ `DATABASES` با تابعِ `_resolve_database()` ساخته می‌شود: بدونِ متغیر = SQLite (رفتارِ قبل)، با `postgres://` = PostgreSQL (درایورِ psycopg). هیچ کدی نباید به `sqlite3` یا فایلِ `db.sqlite3` فرضِ صریح داشته باشد؛ تست‌ها باید روی هر دو موتور سبز بمانند — SQL اختصاصیِ یک موتور باید با `connection.vendor` و `skipUnless` شرطی شود (نمونه‌ها: `PRAGMA foreign_keys` در `StudyLogOrphanDeleteTests` و `FOR UPDATE` در `PostgresForUpdateTests`). ترتیبِ بررسی‌ها در `_resolve_database`: scheme → نامِ دیتابیس → پورت → پارامترهای query → درایور؛ این ترتیب را حفظ کن تا پیام‌هایِ خطا دقیق بمانند.
+
 ## ۷. Conventions رعایت‌شده در کد
 
 - تمامِ کامنت‌های کد و پیام‌های خطا/UI به **فارسی** نوشته شده‌اند؛ نام‌های متغیر/تابع/کلاس به **انگلیسی**.
@@ -117,11 +119,11 @@ JWT با `djangorestframework-simplejwt`. توکنِ دسترسی: ۱ روز. ت
 | `SECRET_KEY` | از `DJANGO_SECRET_KEY`؛ پیش‌فرض = کلیدِ توسعه | در Production کلیدِ واقعی (الزامی) |
 | `ALLOWED_HOSTS` | از `DJANGO_ALLOWED_HOSTS`؛ پیش‌فرض خالی | در Production الزامی (سپرِ بوت) |
 | `CORS_ALLOW_ALL_ORIGINS` | از `DJANGO_CORS_ALLOW_ALL`؛ پیش‌فرض `True` | در Production = false + `DJANGO_ALLOWED_ORIGINS` |
-| `DATABASES` | SQLite | فایلِ `backend/db.sqlite3` |
+| `DATABASES` | از `DATABASE_URL`؛ پیش‌فرض SQLite | بدونِ متغیر = `backend/db.sqlite3`؛ با `postgres://` = PostgreSQL (نکته‌ی ۶.۱۳) |
 | `STATICFILES_DIRS` | `[BASE_DIR.parent / 'static']` | فرانت‌اند را هم سرو می‌کند |
 | `SIMPLE_JWT` | دسترسی ۱ روز / تمدید ۷ روز | چرخش + لیستِ سیاه فعال (از 2026-09-08؛ نکته‌ی ۶.۱۱) |
 
-پیش‌فرض‌ها عمداً «dev-safe»اند: بدونِ ست‌کردنِ هیچ متغیری، همان رفتارِ قبل از 2026-09-06 برقرار است (۱۰۳ تست بدونِ متغیر سبز می‌شوند). فایلِ `.env` هنوز وجود ندارد و کتابخانه‌ی dotenv هم اضافه نشده؛ متغیرها با `set`/`setx` (ویندوز) یا `export` (لینوکس) ست می‌شوند — جدولِ کامل در `README.md` بخشِ ۱۰.
+پیش‌فرض‌ها عمداً «dev-safe»اند: بدونِ ست‌کردنِ هیچ متغیری، همان رفتارِ قبل از 2026-09-06 برقرار است (۱۱۶ تست بدونِ متغیر سبز می‌شوند). فایلِ `.env` هنوز وجود ندارد و کتابخانه‌ی dotenv هم اضافه نشده؛ متغیرها با `set`/`setx` (ویندوز) یا `export` (لینوکس) ست می‌شوند — جدولِ کامل در `README.md` بخشِ ۱۰.
 
 ## ۱۰. فایل‌های مستندات مرتبط
 

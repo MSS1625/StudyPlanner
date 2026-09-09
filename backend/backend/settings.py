@@ -144,14 +144,132 @@ WSGI_APPLICATION = 'backend.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
-# طبق محدودیتِ پروژه، از SQLite استفاده می‌شود: کل دیتابیس در یک فایل
-# (db.sqlite3) ذخیره می‌شود و نیازی به نصب/راه‌اندازیِ سرور دیتابیسِ جدا نیست.
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+# از 2026-09-09: موتورِ دیتابیس از متغیرِ محیطیِ DATABASE_URL خوانده می‌شود —
+# با «پیش‌فرضِ امنِ توسعه»: بدونِ این متغیر دقیقاً همان SQLiteِ قبلی
+# (فایلِ db.sqlite3) فعال می‌شود و هیچ رفتاری عوض نمی‌شود. برای
+# PostgreSQL (چندکاربره/Production) آدرسِ کامل را ست کنید، مثل:
+#   set DATABASE_URL=postgres://user:pass@localhost:5432/plannerdb
+# پارامترهایِ اختیاریِ انتهایِ URL:
+#   ?sslmode=require        → گزینه‌ی sslmode درایورِ psycopg
+#   ?conn_max_age=60        → اتصالِ ماندگار (CONN_MAX_AGE جنگو)
+#   ?host=/var/run/postgresql → مسیرِ سوکتِ یونیکس به‌جایِ TCP (لینوکس)
+# درایورِ psycopg لازم است و در requirements.txt اعلام شده است
+# (نصب: pip install -r requirements.txt). رمزِ عبوری که کاراکترِ خاص دارد
+# باید URL-encode شود (مثلاً @ → %40).
+
+def _resolve_database(env=None, import_module=None):
+    """متغیرِ DATABASE_URL را به تنظیماتِ DATABASES['default'] ترجمه می‌کند.
+
+    - بدونِ متغیر (یا خالی) → همان SQLiteِ توسعه‌ی قبل، دست‌نخورده.
+    - postgres:// یا postgresql:// → موتورِ PostgreSQL جنگو.
+    - هر خطایِ پیکربندی (scheme نامعتبر، پورتِ غیر عددی، نبودِ نامِ
+      دیتابیس، نبودِ درایورِ psycopg) همان موقع و با پیامِ راهنما
+      متوقف می‌شود (ImproperlyConfigured) — نه وسطِ اولین کوئری.
+
+    پارامترهایِ env و import_module فقط برای تست‌پذیری‌اند (تزریقِ
+    محیطِ ساختگی و شبیه‌سازیِ نبودِ درایور بدونِ دست‌زدن به سیستم).
+    """
+    from urllib.parse import urlsplit, parse_qs, unquote
+
+    if env is None:
+        env = os.environ
+    if import_module is None:
+        from importlib import import_module as _default_import
+        import_module = _default_import
+
+    raw = (env.get('DATABASE_URL') or '').strip()
+    if not raw:
+        # پیش‌فرضِ امنِ توسعه — دقیقاً همانِ قبل از این تغییر:
+        return {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+
+    parts = urlsplit(raw)
+    scheme = parts.scheme.lower()
+    if scheme not in ('postgres', 'postgresql'):
+        raise ImproperlyConfigured(
+            f'DATABASE_URL: only postgres:// or postgresql:// URLs are '
+            f'supported (got scheme: {scheme or "empty"}). For SQLite, '
+            f'simply unset DATABASE_URL — the development default applies.'
+        )
+
+    name = parts.path.lstrip('/')
+    if not name:
+        raise ImproperlyConfigured(
+            'DATABASE_URL: database name is missing from the URL path, '
+            'e.g. postgres://user:pass@localhost:5432/plannerdb.'
+        )
+
+    try:
+        port = parts.port
+    except ValueError:
+        raise ImproperlyConfigured(
+            f'DATABASE_URL: port must be numeric, e.g. '
+            f'postgres://user:pass@localhost:5432/{name} (got: {raw!r}).'
+        )
+
+    query = parse_qs(parts.query)
+    # «?host=» مسیرِ سوکتِ یونیکس را ممکن می‌کند (الگویِ رایج در هاست‌هایِ
+    # ابری) و بر hostnameِ داخلِ URL اولویت دارد.
+    if query.get('host'):
+        host = unquote(query['host'][0])
+    else:
+        host = parts.hostname or ''
+
+    database = {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': name,
+        'USER': unquote(parts.username or ''),
+        'PASSWORD': unquote(parts.password or ''),
+        'HOST': host,
+        'PORT': str(port) if port else '',
     }
-}
+
+    if query.get('sslmode'):
+        database['OPTIONS'] = {'sslmode': query['sslmode'][0]}
+
+    if query.get('conn_max_age'):
+        try:
+            conn_max_age = int(query['conn_max_age'][0])
+        except ValueError:
+            raise ImproperlyConfigured(
+                'DATABASE_URL: conn_max_age query parameter must be an '
+                f'integer number of seconds (got: {query["conn_max_age"][0]!r}).'
+            )
+        if conn_max_age < 0:
+            raise ImproperlyConfigured(
+                'DATABASE_URL: conn_max_age must be >= 0 (0 = close after '
+                'each request, N = keep the connection open for N seconds).'
+            )
+        database['CONN_MAX_AGE'] = conn_max_age
+
+    # بررسیِ درایور در آخرین گام: خطاهایِ URL خودشان پیامِ روشن‌تر دارند؛
+    # اینجا فقط مطمئن می‌شویم psycopg (نسخه‌ی ۳) واقعاً import می‌شود.
+    try:
+        import_module('psycopg')
+    except ImportError:
+        raise ImproperlyConfigured(
+            'DATABASE_URL points to PostgreSQL, but the psycopg driver is '
+            'not installed. Run: pip install "psycopg[binary]"  '
+            '(or pip install -r requirements.txt)'
+        )
+    return database
+
+
+DATABASES = {'default': _resolve_database()}
+
+# هشدارِ یک‌خطی برای «Production روی SQLite»: بستنِ چشم به این حالت، یعنی
+# اجرایِ نمایشیِ بدونِ کاربرِ هم‌زمان — قابل‌قبول برای دمو/دفاع، نه انتشارِ
+# واقعی. فقط روی stderr نوشته می‌شود و بوت را متوقف نمی‌کند (سپرِ سختِ
+# Production در بالایِ همین فایل همان‌جا که باید، ایستاده است).
+if not DEBUG and DATABASES['default']['ENGINE'].endswith('sqlite3'):
+    import sys as _sys
+    _sys.stderr.write(
+        'Warning: DJANGO_DEBUG=false is running on SQLite. This is fine for '
+        'a local demo, but for real multi-user production set DATABASE_URL '
+        'to a PostgreSQL server.\n'
+    )
 
 
 # Password validation

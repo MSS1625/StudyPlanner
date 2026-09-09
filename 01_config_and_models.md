@@ -47,6 +47,7 @@
 **بخش‌های کلیدی و کاری که هرکدام انجام می‌دهد:**
 
 - **`SECRET_KEY` و `DEBUG`**: کلید امنیتیِ رمزنگاریِ داخلیِ جنگو (برای امضای Session، توکن‌های CSRF و...) و حالتِ توسعه (`DEBUG=True`) که خطاهای کامل را نمایش می‌دهد و فایل‌های استاتیک را خودکار سرو می‌کند. از 2026-09-06 هر دو از متغیرهایِ محیطیِ `DJANGO_SECRET_KEY`/`DJANGO_DEBUG` خوانده می‌شوند و پیش‌فرض‌ها همانِ مقادیرِ توسعه‌اند (جدولِ متغیرها در `README.md` بخشِ ۱۰).
+- **متغیرِ محیطیِ `DATABASE_URL` (از 2026-09-09)**: موتورِ دیتابیس — بدونِ متغیر، SQLiteِ توسعه؛ با `postgres://...`، PostgreSQL (جزئیات در بولِتِ `DATABASES`؛ دستورِ انتقالِ داده با `dumpdata`/`loaddata` در `README.md` بخشِ ۱۰).
 - **متغیرهایِ محیطی (از 2026-09-06)**: `SECRET_KEY`، `DEBUG`، `ALLOWED_HOSTS`، `CORS_ALLOW_ALL_ORIGINS` و `CORS_ALLOWED_ORIGINS` از متغیرهایِ محیطیِ `DJANGO_SECRET_KEY`، `DJANGO_DEBUG`، `DJANGO_ALLOWED_HOSTS`، `DJANGO_CORS_ALLOW_ALL` و `DJANGO_ALLOWED_ORIGINS` خوانده می‌شوند؛ بدونِ هیچ متغیری همانِ مقادیرِ توسعه‌ی قبلی اعمال می‌شود (۸۹ تست بدونِ متغیر سبزند). سپرِ راه‌اندازی: در حالتِ `DEBUG=false`، کلیدِ توسعه یا `ALLOWED_HOSTS`ِ خالی، بوت را با `ImproperlyConfigured` متوقف می‌کند — همانِ ابتدا و با پیامِ راهنما، نه با خطایِ مبهم در میانه‌ی کار.
 
 - **`INSTALLED_APPS`**: فهرست تمام اپلیکیشن‌های فعال. شامل اپ‌های داخلیِ جنگو (`admin`, `auth`, `staticfiles`...)، کتابخانه‌های شخص‌ثالث نصب‌شده با pip (`rest_framework` برای ساختِ API، `rest_framework_simplejwt` برای احراز هویتِ JWT، `corsheaders` برای مدیریتِ درخواست‌های Cross-Origin، و `rest_framework_simplejwt.token_blacklist` — از 2026-09-08: جدول‌های لیستِ سیاهِ توکن که با یک‌بار migrate ساخته می‌شوند)، و در نهایت اپلیکیشنِ خودِ پروژه (`planner`) که تمام منطقِ دامنه در آن است.
@@ -55,7 +56,7 @@
 
 - **`ROOT_URLCONF = 'backend.urls'`**: تعیین می‌کند نقشه‌ی اصلیِ مسیرها در کجاست (فایل بعدی که توضیح داده می‌شود).
 
-- **`DATABASES`**: پیکربندیِ اتصال به دیتابیس. طبق محدودیت پروژه از **SQLite** استفاده شده (فایل `db.sqlite3` در ریشه‌ی `backend/`)، چون نیازی به نصب/راه‌اندازیِ یک سرور دیتابیسِ جداگانه نیست و برای مقیاسِ این پروژه (آموزشی/تک‌کاربره) کافی است.
+- **`DATABASES`**: پیکربندیِ اتصال به دیتابیس. از 2026-09-09 تابعِ `_resolve_database()` این بخش را می‌سازد: بدونِ متغیرِ محیطیِ `DATABASE_URL` همان **SQLite**ِ همیشگی (فایل `db.sqlite3` در ریشه‌ی `backend/`)؛ با آدرسِ `postgres://user:pass@host:port/dbname` موتورِ PostgreSQL (درایورِ psycopg در `requirements.txt`). پارامترهایِ اختیاریِ URL: `?sslmode=require`، `?conn_max_age=60` و `?host=/var/run/postgresql` (سوکتِ یونیکس). خطایِ URL یا درایورِ غایب، همانِ بوت با `ImproperlyConfigured` و پیامِ راهنما متوقف می‌شود؛ و در `DEBUG=false` رویِ SQLite یک هشدارِ یک‌خطی روی stderr چاپ می‌شود.
 
 - **`AUTH_PASSWORD_VALIDATORS`**: چهار قانونِ استانداردِ جنگو برای قدرتِ رمز عبور (شباهت به نامِ کاربری، حداقل طول، رمزهای رایج، رمزِ کاملاً عددی) که پیش از ذخیره‌ی هر رمز جدید اجرا می‌شوند.
 

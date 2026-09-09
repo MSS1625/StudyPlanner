@@ -17,6 +17,8 @@
 #   - StudyPlanAlgorithmTests . تستِ واحدِ توابعِ خالصِ utils.py
 #   - PaginationAPITests ...... صفحه‌بندیِ اختیاریِ endpointهای لیستی (?page/?page_size)
 #   - SettingsEnvVarsTests .... تنظیماتِ محیطیِ Production (بوتِ مفسرِ جدا؛ بدونِ DB)
+#   - DatabaseUrlSettingsTests  دیتابیس از متغیرِ DATABASE_URL — PostgreSQL + پیش‌فرضِ امنِ SQLite (2026-09-09)
+#   - PostgresForUpdateTests ... رگرسیونِ FOR UPDATE در SQL — فقط وقتی موتورِ فعال PostgreSQL است
 #
 # اجرا (از پوشه‌ی backend):
 #   python manage.py test planner -v 2
@@ -33,19 +35,23 @@
 import os
 import subprocess
 import sys
+import tempfile
+import unittest
 from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
-from django.db import IntegrityError, connection
+from django.core.exceptions import ImproperlyConfigured
+from django.db import IntegrityError, connection, transaction
 from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TransactionTestCase
+from django.test.utils import CaptureQueriesContext
 from rest_framework import status
 from rest_framework.test import APIClient, APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from backend.settings import _env_bool, _env_list
+from backend.settings import BASE_DIR, _env_bool, _env_list, _resolve_database
 from .models import Subject, Exam, StudyLog, StudyPlan
 from .utils import (
     compute_subject_progress,
@@ -953,6 +959,13 @@ class StudyLogConcurrencyLockTests(BaseAPITestCase):
         self.assertFalse(StudyLog.objects.exists())
 
 
+@unittest.skipUnless(
+    connection.vendor == 'sqlite',
+    'ساختِ یتیمِ واقعی با PRAGMA foreign_keys فقط در SQLite ممکن است؛'
+    ' در PostgreSQL همین تست با skip رد می‌شود (رفتارِ حذفِ یتیم توسط'
+    ' رگرسیون‌های Lost Update در StudyLogConcurrencyLockTests پوشش داده'
+    ' می‌شود).',
+)
 class StudyLogOrphanDeleteTests(TransactionTestCase):
     """
     حذفِ مستقیمِ گزارشِ «یتیم» (کلیدِ خارجیِ شکسته) — رفتارِ defensive:
@@ -1536,3 +1549,250 @@ class SettingsEnvVarsTests(SimpleTestCase):
         )
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         self.assertIn('cors-ok', result.stdout)
+
+
+# ---------------------------------------------------------------------------
+# ۱۵) دیتابیس از متغیرِ محیطیِ DATABASE_URL — پشتیبانیِ PostgreSQL
+# (پیش‌فرضِ امنِ توسعه: بدونِ متغیر، همان SQLiteِ قبل)
+# ---------------------------------------------------------------------------
+
+try:
+    import psycopg  # noqa: F401 — فقط برای تشخیصِ نصب‌بودنِ درایور
+    _HAS_PSYCOPG = True
+except ImportError:
+    _HAS_PSYCOPG = False
+
+
+def _fake_import(name):
+    """شبیه‌سازیِ «psycopg نصب نیست» — همیشه ImportError می‌دهد."""
+    raise ImportError(f'No module named {name!r} (simulated)')
+
+
+class DatabaseUrlSettingsTests(SimpleTestCase):
+    """
+    متغیرِ DATABASE_URL — سه لایه، مثلِ SettingsEnvVarsTests:
+
+    ۱) تستِ واحدِ تابعِ `_resolve_database` (بدونِ دیتابیس؛ محیط و
+       درایورِ ساختگی تزریق می‌شود تا نتیجه همه‌جا قطعی باشد).
+    ۲) «بوتِ واقعی»: مفسرِ تازه با DATABASE_URL دلخواه بالا می‌آید.
+    ۳) نبودِ درایور: یک ماژولِ سایه‌ی psycopg در PYTHONPATH جلوتر از
+       site-packages می‌نشیند و import با خطا می‌شکند — این تست حتی
+       روی ماشینِ نصب‌شده هم همانِ روزِ اول را بازسازی می‌کند.
+    """
+
+    _ENV_KEYS = SettingsEnvVarsTests._ENV_KEYS + ('DATABASE_URL',)
+
+    def _boot(self, extra_env, code, extra_pythonpath=''):
+        """مفسرِ تازه با متغیرهایِ داده‌شده (DATABASE_URL همیشه پاک می‌شود)."""
+        env = os.environ.copy()
+        env['DJANGO_SETTINGS_MODULE'] = 'backend.settings'
+        for key in self._ENV_KEYS:
+            env.pop(key, None)          # نشتِ محیطِ تست به نتیجه نداشته باشد
+        env.update(extra_env)
+        if extra_pythonpath:
+            env['PYTHONPATH'] = (
+                extra_pythonpath + os.pathsep + env.get('PYTHONPATH', '')
+            )
+        return subprocess.run(
+            [sys.executable, '-c', code],
+            capture_output=True, text=True, env=env,
+            cwd=str(Path(__file__).resolve().parents[1]),   # پوشه‌ی backend/
+            timeout=90,
+        )
+
+    # ---- ۱) تستِ واحدِ `_resolve_database` -----------------------------------
+
+    def test_default_without_url_returns_sqlite(self):
+        """رگرسیون: بدونِ DATABASE_URL دقیقاً همان SQLiteِ قبل — هیچ تغییری نه."""
+        self.assertEqual(
+            _resolve_database({}),
+            {
+                'ENGINE': 'django.db.backends.sqlite3',
+                'NAME': BASE_DIR / 'db.sqlite3',
+            },
+        )
+        # مقدارِ خالی/فاصله‌ای هم مثلِ نبودِ متغیر رفتار می‌کند:
+        self.assertEqual(
+            _resolve_database({'DATABASE_URL': '   '})['ENGINE'],
+            'django.db.backends.sqlite3',
+        )
+
+    @unittest.skipUnless(_HAS_PSYCOPG, 'psycopg نصب نیست (pip install -r requirements.txt)')
+    def test_postgres_url_full_components(self):
+        """URL کامل: user/pass (با URL-decode)، host، port و نامِ دیتابیس."""
+        database = _resolve_database(
+            {'DATABASE_URL': 'postgres://study:p%40ss@db.example.com:5433/plannerdb'}
+        )
+        self.assertEqual(database['ENGINE'], 'django.db.backends.postgresql')
+        self.assertEqual(database['USER'], 'study')
+        self.assertEqual(database['PASSWORD'], 'p@ss')      # %40 → @
+        self.assertEqual(database['HOST'], 'db.example.com')
+        self.assertEqual(database['PORT'], '5433')
+        self.assertEqual(database['NAME'], 'plannerdb')
+        self.assertNotIn('OPTIONS', database)               # بدونِ query → بدونِ OPTIONS
+        self.assertNotIn('CONN_MAX_AGE', database)
+
+    @unittest.skipUnless(_HAS_PSYCOPG, 'psycopg نصب نیست (pip install -r requirements.txt)')
+    def test_postgres_url_query_params(self):
+        """پارامترهایِ اختیاری: ?host= (سوکت)، ?sslmode=، ?conn_max_age=."""
+        database = _resolve_database(
+            {'DATABASE_URL': (
+                'postgresql://u:pw@ignored-host:5432/plannerdb'
+                '?host=/var/run/postgresql&sslmode=require&conn_max_age=60'
+            )}
+        )
+        # ?host= بر hostnameِ داخلِ URL اولویت دارد (الگویِ هاستِ ابری):
+        self.assertEqual(database['HOST'], '/var/run/postgresql')
+        self.assertEqual(database['OPTIONS'], {'sslmode': 'require'})
+        self.assertEqual(database['CONN_MAX_AGE'], 60)
+        # schemeِ postgresql هم مثلِ postgres پذیرفته می‌شود:
+        self.assertEqual(database['ENGINE'], 'django.db.backends.postgresql')
+
+    def test_rejects_unsupported_scheme(self):
+        """scheme غیر از postgres/postgresql → ImproperlyConfiguredِ راهنما."""
+        with self.assertRaises(ImproperlyConfigured) as ctx:
+            _resolve_database({'DATABASE_URL': 'mysql://user:pass@localhost/db'})
+        self.assertIn('postgres', str(ctx.exception))
+        self.assertIn('mysql', str(ctx.exception))
+
+    def test_rejects_invalid_port(self):
+        """پورتِ غیر عددی → ImproperlyConfigured (نه عددِ بی‌معنا)."""
+        with self.assertRaises(ImproperlyConfigured) as ctx:
+            _resolve_database(
+                {'DATABASE_URL': 'postgres://u:p@localhost:abc/plannerdb'}
+            )
+        self.assertIn('port', str(ctx.exception))
+
+    def test_rejects_missing_database_name(self):
+        """URL بدونِ نامِ دیتابیس → ImproperlyConfigured با مثالِ درست."""
+        with self.assertRaises(ImproperlyConfigured) as ctx:
+            _resolve_database({'DATABASE_URL': 'postgres://u:p@localhost:5432'})
+        self.assertIn('database name', str(ctx.exception))
+
+    def test_rejects_non_integer_conn_max_age(self):
+        """conn_max_age= غیر عددی → ImproperlyConfigured، نه ValueErrorِ خام."""
+        with self.assertRaises(ImproperlyConfigured) as ctx:
+            _resolve_database(
+                {'DATABASE_URL': 'postgres://u:p@localhost/db?conn_max_age=hour'}
+            )
+        self.assertIn('integer', str(ctx.exception))
+
+    def test_missing_psycopg_driver_message(self):
+        """درایورِ غایب → ImproperlyConfigured با دستورِ نصبِ psycopg."""
+        with self.assertRaises(ImproperlyConfigured) as ctx:
+            _resolve_database(
+                {'DATABASE_URL': 'postgres://u:p@localhost:5432/db'},
+                import_module=_fake_import,
+            )
+        message = str(ctx.exception)
+        self.assertIn('psycopg', message)
+        self.assertIn('pip install', message)
+
+    # ---- ۲) بوتِ واقعی با DATABASE_URL ----------------------------------------
+
+    def test_boot_without_url_keeps_sqlite_default(self):
+        """بدونِ متغیر: بوتِ سالم روی همانِ SQLiteِ توسعه (رفتارِ قبل)."""
+        code = (
+            'import django; django.setup(); from django.conf import settings; '
+            "assert settings.DATABASES['default']['ENGINE'] "
+            "== 'django.db.backends.sqlite3', 'ENGINE'; "
+            "assert str(settings.DATABASES['default']['NAME']).endswith"
+            "('db.sqlite3'), 'NAME'; "
+            'print("db-default-ok")'
+        )
+        result = self._boot({}, code)
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn('db-default-ok', result.stdout)
+
+    def test_boot_postgres_without_psycopg_refuses_to_boot(self):
+        """نبودِ درایور: بوت با ImproperlyConfiguredِ psycopg متوقف می‌شود."""
+        with tempfile.TemporaryDirectory() as tmp:
+            # ماژولِ سایه: import psycopg درونِ همین مفسر با خطا می‌شکند و
+            # جلوتر از site-packages واقعی پیدا می‌شود (PYTHONPATH اولویت دارد).
+            (Path(tmp) / 'psycopg.py').write_text(
+                'raise ImportError("simulated: psycopg is not installed")\n',
+                encoding='utf-8',
+            )
+            result = self._boot(
+                {'DATABASE_URL': 'postgres://u:p@localhost:5432/db'},
+                'import django; django.setup()',
+                extra_pythonpath=tmp,
+            )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('psycopg', result.stderr)
+        self.assertIn('pip install', result.stderr)
+
+    @unittest.skipUnless(_HAS_PSYCOPG, 'psycopg نصب نیست (pip install -r requirements.txt)')
+    def test_boot_postgres_url_resolves_engine(self):
+        """بوتِ سالم با URL کامل: مقادیرِ PostgreSQL دقیقاً از URL می‌آیند."""
+        code = (
+            'import django; django.setup(); from django.conf import settings; '
+            "db = settings.DATABASES['default']; "
+            "assert db['ENGINE'] == 'django.db.backends.postgresql', 'ENGINE'; "
+            "assert db['USER'] == 'study', 'USER'; "
+            "assert db['PASSWORD'] == 'p@ss', 'PASSWORD'; "
+            "assert db['HOST'] == 'db.example.com', 'HOST'; "
+            "assert db['PORT'] == '5433', 'PORT'; "
+            "assert db['NAME'] == 'plannerdb', 'NAME'; "
+            "assert db['CONN_MAX_AGE'] == 45, 'CONN'; "
+            'print("pg-resolve-ok")'
+        )
+        result = self._boot(
+            {'DATABASE_URL': (
+                'postgres://study:p%40ss@db.example.com:5433/plannerdb'
+                '?conn_max_age=45'
+            )},
+            code,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn('pg-resolve-ok', result.stdout)
+
+    def test_boot_prod_mode_on_sqlite_prints_warning(self):
+        """DEBUG=false بدونِ DATABASE_URL: هشدارِ SQLite روی stderr، بوتِ سالم."""
+        key = 'p' * 64
+        result = self._boot(
+            {'DJANGO_DEBUG': 'false', 'DJANGO_SECRET_KEY': key,
+             'DJANGO_ALLOWED_HOSTS': 'example.com'},
+            'import django; django.setup(); print("prod-sqlite-ok")',
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn('prod-sqlite-ok', result.stdout)
+        self.assertIn('SQLite', result.stderr)          # هشدارِ یک‌خطی
+
+
+# ---------------------------------------------------------------------------
+# ۱۶) قفلِ FOR UPDATE — فقط وقتی موتورِ فعال PostgreSQL است
+# (در SQLite قفلِ FOR UPDATE به SQL ترجمه نمی‌شود — تستِ اسپایِ
+# StudyLogConcurrencyLockTests همان‌جا رفتار را پوشش می‌دهد)
+# ---------------------------------------------------------------------------
+
+@unittest.skipUnless(
+    connection.vendor == 'postgresql',
+    'FOR UPDATE فقط در SQLِ PostgreSQL دیده می‌شود؛'
+    ' در SQLite این تست skip می‌شود (پوششِ رفتاری در کلاس‌های قبل است).',
+)
+class PostgresForUpdateTests(TransactionTestCase):
+    """
+    رگرسیونِ موتور: رویِ PostgreSQL، عبارتِ select_for_update باید واقعاً
+    «FOR UPDATE» در SQL تولید کند — همان قفلی که Lost Update را در
+    چندکاربره بسته می‌کند (ادغامِ منطقیِ Taskهای ۲۴ و ۲۵).
+    """
+
+    def test_lock_emits_for_update_sql(self):
+        user = User.objects.create_user(username='dave', password='pw-12345678')
+        subject = Subject.objects.create(user=user, name='زیست', difficulty=3)
+        exam = Exam.objects.create(
+            subject=subject,
+            exam_date=date.today() + timedelta(days=10),
+            study_hours_remaining=5,
+            chapters_remaining=3,
+        )
+
+        with transaction.atomic():          # select_for_update فقط داخلِ تراکنش
+            with CaptureQueriesContext(connection) as ctx:
+                Exam.objects.select_for_update().get(pk=exam.pk)
+
+        self.assertTrue(
+            any('FOR UPDATE' in q['sql'] for q in ctx.captured_queries),
+            msg=[q['sql'] for q in ctx.captured_queries],
+        )
