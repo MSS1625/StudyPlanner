@@ -56,10 +56,15 @@ from django.db import IntegrityError, OperationalError, connection, transaction
 from django.db.models.query import QuerySet
 from django.test import SimpleTestCase, TransactionTestCase, override_settings
 from django.test.utils import CaptureQueriesContext
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient, APITestCase
 from rest_framework.throttling import SimpleRateThrottle
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.token_blacklist.models import (
+    BlacklistedToken,
+    OutstandingToken,
+)
 
 from backend.settings import (
     BASE_DIR,
@@ -70,7 +75,7 @@ from backend.settings import (
     _env_throttle_rate,
     _resolve_database,
 )
-from .models import Subject, Exam, StudyLog, StudyPlan
+from .models import Subject, Exam, StudyLog, StudyPlan, UserSecurityProfile
 from .utils import (
     compute_subject_progress,
     generate_study_plan,
@@ -2861,3 +2866,430 @@ class SecurityHeadersResponseTests(BaseAPITestCase):
         cookie = resp.cookies.get('csrftoken')
         self.assertIsNotNone(cookie, 'admin login should set a CSRF cookie')
         self.assertFalse(cookie['secure'])
+
+
+# ---------------------------------------------------------------------------
+# امنیتِ حسابِ کاربری: سیاستِ رمز + تغییرِ رمز + ابطالِ کاملِ نشست‌ها
+# (از 2026-09-10)
+# ---------------------------------------------------------------------------
+
+# رمزِ جدیدِ استانداردِ این بخش — از همه‌ی اعتبارسنج‌ها (طول/رایج/عددی/
+# شباهت) عبور می‌کند و در هیچ فهرستِ رمزهای رایج نیست.
+_ACCOUNT_NEW_PASSWORD = 'brand-new-pass-77'
+
+
+class RegisterPasswordPolicyTests(BaseAPITestCase):
+    """سیاستِ رمزِ عبور در ثبت‌نام (از 2026-09-10).
+
+    تا این تاریخ، AUTH_PASSWORD_VALIDATORS در settings «تعریف» شده بود ولی
+    هیچ‌جا صدا زده نمی‌شد — ثبت‌نام با رمزهایِ «12345678» و «password»
+    ممکن بود. حالا UserSerializer.validate قبل ازِ ساختِ کاربر، رمز را با
+    همان اعتبارسنج‌هایِ جنگو می‌سنجد.
+
+    پیام‌هایِ خطا مالِ خودِ جنگو هستند (نه کاتالوگِ پروژه) و جنگو کاتالوگِ
+    fa و en خودش را دارد — پس ترجمه‌ی پیام با Accept-Language خودکار است.
+    """
+
+    def _register(self, username, password):
+        return self.client.post(
+            '/api/auth/register/',
+            {'username': username, 'password': password},
+            format='json',
+        )
+
+    def test_common_password_rejected(self):
+        """رمزِ رایج («12345678») → ۴۰۰ با کلیدِ password و بدونِ ساختِ کاربر."""
+        response = self._register('policyuser1', '12345678')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('password', response.json())
+        self.assertGreater(len(response.json()['password']), 0)
+        self.assertFalse(User.objects.filter(username='policyuser1').exists())
+
+    def test_too_short_password_rejected(self):
+        """رمزِ کوتاه‌تر از حداقلِ ۸ نویسه → ۴۰۰."""
+        response = self._register('policyuser2', 'short')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('password', response.json())
+        self.assertFalse(User.objects.filter(username='policyuser2').exists())
+
+    def test_numeric_password_rejected(self):
+        """رمزِ کاملاً عددی (حتی غیرِ رایج) → ۴۰۰ (NumericPasswordValidator)."""
+        response = self._register('policyuser3', '13579246')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('password', response.json())
+
+    def test_password_similar_to_username_rejected(self):
+        """رمزِ هم‌نام با username → ۴۰۰ (UserAttributeSimilarityValidator)."""
+        response = self._register('hamidreza', 'hamidreza')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('password', response.json())
+        self.assertFalse(User.objects.filter(username='hamidreza').exists())
+
+    def test_strong_password_still_accepted(self):
+        """رگرسیون: رمزِ معتبرِ همیشگیِ پروژه ('pw-12345678') → ۲۰۱ + ورود."""
+        response = self._register('policyuser4', 'pw-12345678')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        login = self.client.post(
+            '/api/auth/login/',
+            {'username': 'policyuser4', 'password': 'pw-12345678'},
+            format='json',
+        )
+        self.assertEqual(login.status_code, status.HTTP_200_OK)
+
+    def test_policy_message_translated_per_language(self):
+        """پیامِ سیاست با Accept-Language ترجمه می‌شود (fa/en جنگو)."""
+        fa_response = self._register('policyuser5', '12345678')
+        en_response = self.client.post(
+            '/api/auth/register/',
+            {'username': 'policyuser5', 'password': '12345678'},
+            format='json',
+            HTTP_ACCEPT_LANGUAGE='en',
+        )
+        self.assertEqual(
+            fa_response.json()['password'][0], 'این رمز عبور بسیار رایج است.'
+        )
+        self.assertEqual(
+            en_response.json()['password'][0], 'This password is too common.'
+        )
+
+    def test_direct_user_creation_not_affected(self):
+        """دامنه‌ی سیاست = فقط API ثبت‌نام؛ ساختِ مستقیمِ کاربر (مدیریت/تست)
+        هنوز آزاد است — رگرسیونِ پایه‌ی همه‌ی setUpهای این فایل که با
+        create_user کاربر می‌سازند."""
+        User.objects.create_user('carol', password='weakold')
+        login = self.client.post(
+            '/api/auth/login/',
+            {'username': 'carol', 'password': 'weakold'},
+            format='json',
+        )
+        self.assertEqual(login.status_code, status.HTTP_200_OK)
+
+
+class ChangePasswordAPITests(BaseAPITestCase):
+    """POST /api/auth/password/ — تغییرِ رمز با ابطالِ کاملِ نشست‌ها.
+
+    - رمزِ فعلی لازم است (۴۰۰ با پیامِ ترجمه‌شده در صورتِ خطا).
+    - رمزِ جدید از همان سیاستِ ثبت‌نام می‌گذرد.
+    - همه‌ی توکن‌هایِ Refreshِ برجسته‌یِ کاربر لیستِ سیاه می‌شوند (نه فقط
+      توکنِ همین نشست، مثلِ logout).
+    - پاسخِ موفق جفتِ توکنِ تازه می‌دهد تا نشستِ همین دستگاه ادامه یابد.
+    """
+
+    def _login_tokens(self, username='alice', password='pw-12345678'):
+        body = self.client.post(
+            '/api/auth/login/',
+            {'username': username, 'password': password},
+            format='json',
+        ).json()
+        return body['access'], body['refresh']
+
+    def _change(self, client, current, new):
+        return client.post(
+            '/api/auth/password/',
+            {'current_password': current, 'new_password': new},
+            format='json',
+        )
+
+    def test_change_password_success_returns_fresh_token_pair(self):
+        """مسیرِ خوش‌بخت: ۲۰۰ + توکن‌هایِ تازه که همان‌جا کار می‌کنند."""
+        old_access, old_refresh = self._login_tokens()
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f'Bearer {old_access}')
+
+        response = self._change(client, 'pw-12345678', _ACCOUNT_NEW_PASSWORD)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        body = response.json()
+        self.assertIn('access', body)
+        self.assertIn('refresh', body)
+        # توکن‌هایِ تازه همان‌جا معتبرند (iat >= لحظه‌ی تغییر):
+        fresh = APIClient()
+        fresh.credentials(HTTP_AUTHORIZATION=f"Bearer {body['access']}")
+        self.assertEqual(fresh.get('/api/subjects/').status_code, 200)
+
+    def test_old_refresh_blacklisted_after_change(self):
+        """رگرسیونِ امنیتی: توکنِ Refreshِ قبل ازِ تغییر، غیرقابلِ تمدید."""
+        old_access, old_refresh = self._login_tokens()
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f'Bearer {old_access}')
+        self._change(client, 'pw-12345678', _ACCOUNT_NEW_PASSWORD)
+
+        refresh_response = self.client.post(
+            '/api/auth/refresh/', {'refresh': old_refresh}, format='json'
+        )
+        self.assertEqual(refresh_response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_all_outstanding_tokens_blacklisted_not_just_current(self):
+        """«همه‌ی» نشست‌ها باطل می‌شوند: چند نشستِ هم‌زمان → همه‌ی Refreshها
+        سیاه؛ نه فقط نشستِ تغییردهنده (تفاوتِ کلیدی با logoutِ تک‌توکنی)."""
+        # نشست ۱ (مرورگر) و نشست ۲ (گوشی) — دو ورودِ جدا:
+        _, refresh_browser = self._login_tokens()
+        _, refresh_phone = self._login_tokens()
+        client = APIClient()
+        access_changer, _ = self._login_tokens()
+        client.credentials(HTTP_AUTHORIZATION=f'Bearer {access_changer}')
+        self._change(client, 'pw-12345678', _ACCOUNT_NEW_PASSWORD)
+
+        for label, refresh in [('browser', refresh_browser), ('phone', refresh_phone)]:
+            with self.subTest(session=label):
+                response = self.client.post(
+                    '/api/auth/refresh/', {'refresh': refresh}, format='json'
+                )
+                self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_new_refresh_from_response_still_rotates(self):
+        """توکنِ Refreshِ صادرشده در پاسخ، خودش دوباره چرخش می‌کند (۲۰۰)."""
+        old_access, _ = self._login_tokens()
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f'Bearer {old_access}')
+        body = self._change(client, 'pw-12345678', _ACCOUNT_NEW_PASSWORD).json()
+
+        response = self.client.post(
+            '/api/auth/refresh/', {'refresh': body['refresh']}, format='json'
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('access', response.json())
+
+    def test_login_with_old_password_fails_after_change(self):
+        """بعد ازِ تغییر، ورود با رمزِ قدیمی ۴۰۱ و با رمزِ جدید ۲۰۰ است."""
+        old_access, _ = self._login_tokens()
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f'Bearer {old_access}')
+        self._change(client, 'pw-12345678', _ACCOUNT_NEW_PASSWORD)
+
+        old_login = self.client.post(
+            '/api/auth/login/',
+            {'username': 'alice', 'password': 'pw-12345678'},
+            format='json',
+        )
+        new_login = self.client.post(
+            '/api/auth/login/',
+            {'username': 'alice', 'password': _ACCOUNT_NEW_PASSWORD},
+            format='json',
+        )
+        self.assertEqual(old_login.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(new_login.status_code, status.HTTP_200_OK)
+
+    def test_wrong_current_password_rejected(self):
+        """رمزِ فعلیِ غلط → ۴۰۰ + پیامِ ترجمه‌شده + رمز عوض نمی‌شود."""
+        client = self.client_as(self.alice)
+
+        response = self._change(client, 'wrong-password', _ACCOUNT_NEW_PASSWORD)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.json()['current_password'][0], 'رمز عبور فعلی اشتباه است.'
+        )
+        # رمز عوض نشده — ورود با رمزِ اصلی هنوز موفق است و پروفایلی ساخته نشده:
+        login = self.client.post(
+            '/api/auth/login/',
+            {'username': 'alice', 'password': 'pw-12345678'},
+            format='json',
+        )
+        self.assertEqual(login.status_code, status.HTTP_200_OK)
+        self.assertFalse(
+            UserSecurityProfile.objects.filter(user=self.alice).exists()
+        )
+
+    def test_wrong_current_password_message_translated(self):
+        client = self.client_as(self.alice)
+        response = client.post(
+            '/api/auth/password/',
+            {'current_password': 'wrong-password', 'new_password': _ACCOUNT_NEW_PASSWORD},
+            format='json',
+            HTTP_ACCEPT_LANGUAGE='en',
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.json()['current_password'][0], 'Current password is incorrect.'
+        )
+
+    def test_weak_new_password_rejected(self):
+        """رمزِ جدیدِ ضعیف → ۴۰۰ با پیامِ سیاست؛ رمزِ فعلی دست‌نخورده."""
+        client = self.client_as(self.alice)
+
+        response = self._change(client, 'pw-12345678', '12345678')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('new_password', response.json())
+        login = self.client.post(
+            '/api/auth/login/',
+            {'username': 'alice', 'password': 'pw-12345678'},
+            format='json',
+        )
+        self.assertEqual(login.status_code, status.HTTP_200_OK)
+
+    def test_new_password_similar_to_username_rejected(self):
+        """رمزِ جدیدِ شبیهِ username خودِ کاربر → ۴۰۰ (سنجشِ شباهت با کاربرِ
+        واقعیِ حل‌شده از دیتابیس، نه نمونه‌ی گذرا مثلِ ثبت‌نام)."""
+        client = self.client_as(self.alice)
+
+        response = self._change(client, 'pw-12345678', 'alice1234')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('new_password', response.json())
+
+    def test_requires_authentication(self):
+        """بدونِ توکنِ دسترسی → ۴۰۱ (رمزِ کسی بدونِ احرازِ هویت عوض نمی‌شود)."""
+        response = self.client.post(
+            '/api/auth/password/',
+            {'current_password': 'pw-12345678', 'new_password': _ACCOUNT_NEW_PASSWORD},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_missing_new_password_rejected(self):
+        """بدنه‌ی ناقص (فقط رمزِ فعلی) → ۴۰۰ با کلیدِ new_password."""
+        client = self.client_as(self.alice)
+        response = client.post(
+            '/api/auth/password/',
+            {'current_password': 'pw-12345678'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('new_password', response.json())
+
+    def test_other_users_sessions_unaffected(self):
+        """تغییرِ رمزِ alice نشستِ bob را باطل نمی‌کند (جداسازیِ کاربر-محور)."""
+        bob_client = self.client_as(self.bob)
+        self.assertEqual(bob_client.get('/api/subjects/').status_code, 200)
+
+        alice_client = self.client_as(self.alice)
+        self._change(alice_client, 'pw-12345678', _ACCOUNT_NEW_PASSWORD)
+
+        self.assertEqual(bob_client.get('/api/subjects/').status_code, 200)
+
+    def test_success_message_translated(self):
+        old_access, _ = self._login_tokens()
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f'Bearer {old_access}')
+        response = client.post(
+            '/api/auth/password/',
+            {'current_password': 'pw-12345678', 'new_password': _ACCOUNT_NEW_PASSWORD},
+            format='json',
+            HTTP_ACCEPT_LANGUAGE='en',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.json()['detail'],
+            'Password changed successfully; all other sessions were invalidated.',
+        )
+
+
+class StaleAccessTokenInvalidationTests(BaseAPITestCase):
+    """ابطالِ توکن‌هایِ دسترسیِ قبل ازِ تغییرِ رمز — planner/authentication.py.
+
+    معیار: iat (لحظه‌ی صدورِ توکن، ثانیه‌یِ یونیکس) < password_changed_at → ۴۰۱.
+    برایِ قطعیتِ زمانی (بدونِ sleep)، مهرِ زمانِ پروفایل مستقیماً دستکاری
+    می‌شود — سازوکارِ مقایسه همین است و دقیقاً همین را تست می‌کند.
+    """
+
+    def test_token_issued_before_change_is_rejected(self):
+        """توکنِ صادرشده قبل ازِ تغییرِ رمز → ۴۰۱ روی endpointهایِ عادی."""
+        client = self.client_as(self.alice)
+        self.assertEqual(client.get('/api/subjects/').status_code, 200)
+
+        # مهرِ زمانِ «تغییرِ رمز» دو ثانیه بعد از صدورِ توکن (آینده):
+        UserSecurityProfile.objects.create(
+            user=self.alice, password_changed_at=timezone.now() + timedelta(seconds=2)
+        )
+        response = client.get('/api/subjects/')
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_token_issued_after_change_is_accepted(self):
+        """توکنِ صادرشده «بعد ازِ» تغییرِ رمز معتبر است (پروفایل در گذشته)."""
+        UserSecurityProfile.objects.create(
+            user=self.alice, password_changed_at=timezone.now() - timedelta(seconds=10)
+        )
+        client = self.client_as(self.alice)
+        self.assertEqual(client.get('/api/subjects/').status_code, 200)
+
+    def test_users_without_profile_completely_unaffected(self):
+        """رگرسیونِ ۶.۱۰ (dev-safe): کاربرانِ عادی — که هرگز رمز عوض نکرده‌اند
+        و رکوردِ پروفایل ندارند — دقیقاً همانِ مسیرِ اجراییِ قبلی را می‌روند."""
+        client = self.client_as(self.alice)
+        self.assertFalse(
+            UserSecurityProfile.objects.filter(user=self.alice).exists()
+        )
+        self.assertEqual(client.get('/api/subjects/').status_code, 200)
+        self.assertEqual(client.get('/api/dashboard/').status_code, 200)
+
+    def test_same_second_edge_keeps_token_valid(self):
+        """مرزِ مستندشده: توکنِ صادرشده در «همانِ ثانیه‌یِ» تغییرِ رمز معتبر
+        می‌ماند (رزولوشنِ iat ثانیه است؛ پنجره‌ی حداکثرِ یک ثانیه). این تست
+        مرز را قفل می‌کند تا تغییرِ ناخواسته‌یِ علامتِ مقایسه به 'کمتر-یا‌مساوی'
+        (که توکن‌هایِ تازه را هم می‌کُشد) در تست‌ها واضوح شود."""
+        UserSecurityProfile.objects.create(
+            user=self.alice, password_changed_at=timezone.now()
+        )
+        # توکن «بعد از» ساختِ پروفایل صادر می‌شود → iat >= ثانیه‌یِ مهر:
+        client = self.client_as(self.alice)
+        self.assertEqual(client.get('/api/subjects/').status_code, 200)
+
+    def test_rejection_message_translated(self):
+        """پیامِ ۴۰۱ِ ابطال، ترجمه‌ی خودکار دارد (fa = متنِ اصلی، en = کاتالوگ)."""
+        client = self.client_as(self.alice)
+        UserSecurityProfile.objects.create(
+            user=self.alice, password_changed_at=timezone.now() + timedelta(seconds=2)
+        )
+        fa_response = client.get('/api/subjects/')
+        self.assertEqual(
+            fa_response.json()['detail'],
+            'رمز عبور این حساب تغییر کرده است؛ لطفاً دوباره وارد شوید.',
+        )
+
+        en_client = APIClient()
+        token = str(RefreshToken.for_user(self.alice).access_token)
+        en_client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+        en_response = en_client.get(
+            '/api/subjects/', HTTP_ACCEPT_LANGUAGE='en'
+        )
+        self.assertEqual(
+            en_response.json()['detail'],
+            'The password of this account has changed; please log in again.',
+        )
+
+
+class UserSecurityProfileModelTests(BaseAPITestCase):
+    """مدلِ UserSecurityProfile — قیدها و رفتارِ جدولی (محرکِ ابطالِ نشست)."""
+
+    def test_str_representation_contains_username(self):
+        profile = UserSecurityProfile.objects.create(
+            user=self.alice, password_changed_at=timezone.now()
+        )
+        self.assertIn('alice', str(profile))
+
+    def test_one_profile_per_user_enforced(self):
+        """قیدِ یک‌به‌یک در سطحِ دیتابیس: رکوردِ دوم → IntegrityError."""
+        UserSecurityProfile.objects.create(
+            user=self.alice, password_changed_at=timezone.now()
+        )
+        with self.assertRaises(IntegrityError):
+            UserSecurityProfile.objects.create(
+                user=self.alice, password_changed_at=timezone.now()
+            )
+
+    def test_profile_deleted_with_user(self):
+        """CASCADE: حذفِ کاربر، پروفایلِ امنیتیِ او را هم پاک می‌کند."""
+        profile = UserSecurityProfile.objects.create(
+            user=self.alice, password_changed_at=timezone.now()
+        )
+        self.alice.delete()
+        self.assertFalse(
+            UserSecurityProfile.objects.filter(pk=profile.pk).exists()
+        )
+
+    def test_update_or_create_keeps_single_row_and_advances_timestamp(self):
+        """تغییرِ رمزِ مکرر: همان رکورد به‌روز می‌شود (نه رکوردِ جدید) و مهرِ
+        زمانِ جلو می‌رود — همان کاری که change_password می‌کند."""
+        first = UserSecurityProfile.objects.update_or_create(
+            user=self.alice,
+            defaults={'password_changed_at': timezone.now() - timedelta(days=1)},
+        )[0]
+        later = timezone.now()
+        second = UserSecurityProfile.objects.update_or_create(
+            user=self.alice, defaults={'password_changed_at': later}
+        )[0]
+        self.assertEqual(first.pk, second.pk)
+        self.assertEqual(UserSecurityProfile.objects.count(), 1)
+        self.assertEqual(second.password_changed_at, later)

@@ -19,21 +19,31 @@ from rest_framework import viewsets, status, permissions, pagination
 from rest_framework.decorators import api_view, permission_classes, action, throttle_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
-from rest_framework.exceptions import PermissionDenied, ValidationError, ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 # RefreshToken: برای ساختنِ توکن‌های JWT (دسترسی + تمدید) هنگام ثبت‌نام/ورود
 from rest_framework_simplejwt.tokens import RefreshToken
+# جداولِ «توکن‌هایِ صادرشده» و «لیستِ سیاه» (از 2026-09-10 برایِ تغییرِ رمز):
+# هنگامِ تغییرِ رمز، همه‌ی توکن‌هایِ Refreshِ برجسته‌یِ کاربر یک‌جا باطل می‌شوند
+# (خروجِ تک‌توکنیِ /api/auth/logout/ فقط یکی را می‌بندد).
+from rest_framework_simplejwt.token_blacklist.models import OutstandingToken, BlacklistedToken
 from django.contrib.auth import authenticate
+# سیاستِ رمزِ عبور (از 2026-09-10): اعتبارسنج‌هایِ AUTH_PASSWORD_VALIDATORS
+# روی رمزِ جدیدِ تغییرِ رمز هم اجرا می‌شوند (پیام‌ها مالِ جنگو — ترجمه‌ی fa/en
+# خودکار). خطای جنگو با نامِ مستعارِ جدا تا با ValidationErrorِ DRF اشتباه نشود.
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
+# timezone.now (از 2026-09-10): مهرِ زمانِ تغییرِ رمز در UserSecurityProfile
+from django.utils import timezone
 # gettext (از 2026-09-09): پیام‌هایِ API با زبانِ درخواست (Accept-Language)
 # ترجمه می‌شوند؛ متنِ اصلی فارسی است و کاتالوگِ en ترجمه‌ی انگلیسی را می‌دهد.
 from django.utils.translation import gettext as _
-from django.db import IntegrityError
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 # پایشِ سلامت (از 2026-09-10): اتصالِ زندهٔ دیتابیس برای endpointِ health و
 # تنظیماتِ جاری (نمایشِ DEBUG) — هر دو فقط «خواندن» هستند.
 from django.db import connection
 from django.conf import settings
 
-from .models import Subject, Exam, StudyPlan, StudyLog
+from .models import Subject, Exam, StudyPlan, StudyLog, UserSecurityProfile
 from .serializers import UserSerializer, SubjectSerializer, ExamSerializer, StudyPlanSerializer, StudyLogSerializer
 from .utils import generate_study_plan, format_plan_for_frontend, build_subject_distribution, compute_subject_progress
 # مؤلفه‌ی یادگیریِ آماری (از 2026-09-09): مدلِ کالیبراسیونِ «تخمینِ ساعتیِ
@@ -96,6 +106,78 @@ def login(request):
             'access': str(refresh.access_token),
         })
     return Response({'error': _('نام کاربری یا رمز عبور اشتباه است')}, status=status.HTTP_401_UNAUTHORIZED)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def change_password(request):
+    """تغییرِ رمزِ عبورِ حسابِ خودِ کاربر (از 2026-09-10) — POST /api/auth/password/
+
+    ورودی: {"current_password": "...", "new_password": "..."}
+    خروجیِ موفق: ۲۰۰ + {"detail": ..., "refresh": ..., "access": ...} — جفتِ
+    توکنِ تازه همان‌جا صادر می‌شود تا نشستِ «همین دستگاهِ» فعلی بی‌وقفه ادامه
+    پیدا کند؛ همه‌ی نشست‌هایِ دیگر (توکن‌هایِ Refreshِ برجسته + توکن‌هایِ دسترسیِ
+    قبل ازِ تغییر) باطل می‌شوند.
+
+    دفاعِ سه‌لایه:
+      ۱) رمزِ فعلی باید درست باشد (۴۰۰ با پیامِ ترجمه‌شده — جلویِ تغییرِ رمز
+         توسطِ نشستِ لو‌رفته‌ای صرفاً توکن‌دار).
+      ۲) رمزِ جدید باید از AUTH_PASSWORD_VALIDATORS عبور کند (۴۰۰ با
+         پیام‌هایِ سیاست — همان‌هایِ ثبت‌نام).
+      ۳) بعد ازِ تغییر: همه‌ی OutstandingTokenهایِ کاربر لیست‌سیاه +
+         UserSecurityProfile.password_changed_at ثبت می‌شود تا توکن‌هایِ
+         دسترسیِ قبل ازِ تغییر هم ۴۰۱ بگیرند (planner/authentication.py).
+
+    محدودسازیِ نرخ: پیش‌فرضِ سراسری (scopeِ 'user' — نرخِ هر کاربر)؛ برخلافِ
+    register/login که AuthBurstThrottle دارند، این مسیر فقط برایِ کاربرِ لاگین‌شده
+    معنا دارد و تلاشِ حدسی رویش ممکن نیست (رمزِ فعلی لازم است).
+    """
+    current_password = request.data.get('current_password') or ''
+    new_password = request.data.get('new_password') or ''
+
+    # لایه‌ی ۱: رمزِ فعلی. چکِ صریح (نه authenticate) چون username لازم نیست
+    # و کاربر از قبل با توکنِ معتبر شناخته‌شده است.
+    if not request.user.check_password(current_password):
+        return Response(
+            {'current_password': [_('رمز عبور فعلی اشتباه است.')]},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # لایه‌ی ۲: سیاستِ رمزِ جدید. این‌جا transient user لازم نیست — خودِ
+    # request.user برایِ مقایسه‌ی شباهت (UserAttributeSimilarity) از دیتابیس
+    # حل‌شده است.
+    try:
+        validate_password(new_password, request.user)
+    except DjangoValidationError as error:
+        return Response(
+            {'new_password': list(error.messages)},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # لایه‌ی ۳: اعمالِ اتمیک. set_password رمز را هش می‌کند (هرگز رمزِ خام
+    # ذخیره نمی‌شود)؛ سپس همه‌ی توکن‌هایِ Refreshِ برجسته باطل و لحظه‌ی تغییر
+    # ثبت می‌شود. ترتیب داخلِ transaction: یا همه، یا هیچ.
+    with transaction.atomic():
+        request.user.set_password(new_password)
+        request.user.save(update_fields=['password'])
+        UserSecurityProfile.objects.update_or_create(
+            user=request.user,
+            defaults={'password_changed_at': timezone.now()},
+        )
+        for outstanding in OutstandingToken.objects.filter(user=request.user):
+            # get_or_create چون بعضی‌ها ممکن است از قبل باطل باشند (مثلاً با
+            # logout یا چرخش) — دوباره‌سیاه‌کردن خطا نمی‌دهد، فقط رد می‌شود.
+            BlacklistedToken.objects.get_or_create(token=outstanding)
+
+    # جفتِ توکنِ تازه «بعد ازِ» سیاه‌کردنِ قدیمی‌ها صادر می‌شود تا خودش
+    # در لیستِ سیاه نیفتد؛ iat آن >= لحظه‌ی تغییر است (مرزِ همان‌ثانیه در
+    # docstringِ authentication.py) و فرانت‌اند هر دو را ذخیره می‌کند.
+    refresh = RefreshToken.for_user(request.user)
+    return Response({
+        'detail': _('رمز عبور با موفقیت تغییر کرد؛ همه‌ی نشست‌هایِ دیگر باطل شدند.'),
+        'refresh': str(refresh),
+        'access': str(refresh.access_token),
+    })
 
 
 # ---------------------------------------------------------------------------

@@ -48,7 +48,7 @@
 
 - **`SECRET_KEY` و `DEBUG`**: کلید امنیتیِ رمزنگاریِ داخلیِ جنگو (برای امضای Session، توکن‌های CSRF و...) و حالتِ توسعه (`DEBUG=True`) که خطاهای کامل را نمایش می‌دهد و فایل‌های استاتیک را خودکار سرو می‌کند. از 2026-09-06 هر دو از متغیرهایِ محیطیِ `DJANGO_SECRET_KEY`/`DJANGO_DEBUG` خوانده می‌شوند و پیش‌فرض‌ها همانِ مقادیرِ توسعه‌اند (جدولِ متغیرها در `README.md` بخشِ ۱۰).
 - **متغیرِ محیطیِ `DATABASE_URL` (از 2026-09-09)**: موتورِ دیتابیس — بدونِ متغیر، SQLiteِ توسعه؛ با `postgres://...`، PostgreSQL (جزئیات در بولِتِ `DATABASES`؛ دستورِ انتقالِ داده با `dumpdata`/`loaddata` در `README.md` بخشِ ۱۰).
-- **متغیرهایِ محیطی (از 2026-09-06)**: `SECRET_KEY`، `DEBUG`، `ALLOWED_HOSTS`، `CORS_ALLOW_ALL_ORIGINS` و `CORS_ALLOWED_ORIGINS` از متغیرهایِ محیطیِ `DJANGO_SECRET_KEY`، `DJANGO_DEBUG`، `DJANGO_ALLOWED_HOSTS`، `DJANGO_CORS_ALLOW_ALL` و `DJANGO_ALLOWED_ORIGINS` خوانده می‌شوند؛ بدونِ هیچ متغیری همانِ مقادیرِ توسعه‌ی قبلی اعمال می‌شود (۱۸۵ تست بدونِ متغیر سبزند). سپرِ راه‌اندازی: در حالتِ `DEBUG=false`، کلیدِ توسعه یا `ALLOWED_HOSTS`ِ خالی، بوت را با `ImproperlyConfigured` متوقف می‌کند — همانِ ابتدا و با پیامِ راهنما، نه با خطایِ مبهم در میانه‌ی کار.
+- **متغیرهایِ محیطی (از 2026-09-06)**: `SECRET_KEY`، `DEBUG`، `ALLOWED_HOSTS`، `CORS_ALLOW_ALL_ORIGINS` و `CORS_ALLOWED_ORIGINS` از متغیرهایِ محیطیِ `DJANGO_SECRET_KEY`، `DJANGO_DEBUG`، `DJANGO_ALLOWED_HOSTS`، `DJANGO_CORS_ALLOW_ALL` و `DJANGO_ALLOWED_ORIGINS` خوانده می‌شوند؛ بدونِ هیچ متغیری همانِ مقادیرِ توسعه‌ی قبلی اعمال می‌شود (۲۱۴ تست بدونِ متغیر سبزند). سپرِ راه‌اندازی: در حالتِ `DEBUG=false`، کلیدِ توسعه یا `ALLOWED_HOSTS`ِ خالی، بوت را با `ImproperlyConfigured` متوقف می‌کند — همانِ ابتدا و با پیامِ راهنما، نه با خطایِ مبهم در میانه‌ی کار.
 
 - **`INSTALLED_APPS`**: فهرست تمام اپلیکیشن‌های فعال. شامل اپ‌های داخلیِ جنگو (`admin`, `auth`, `staticfiles`...)، کتابخانه‌های شخص‌ثالث نصب‌شده با pip (`rest_framework` برای ساختِ API، `rest_framework_simplejwt` برای احراز هویتِ JWT، `corsheaders` برای مدیریتِ درخواست‌های Cross-Origin، و `rest_framework_simplejwt.token_blacklist` — از 2026-09-08: جدول‌های لیستِ سیاهِ توکن که با یک‌بار migrate ساخته می‌شوند)، و در نهایت اپلیکیشنِ خودِ پروژه (`planner`) که تمام منطقِ دامنه در آن است.
 
@@ -58,7 +58,7 @@
 
 - **`DATABASES`**: پیکربندیِ اتصال به دیتابیس. از 2026-09-09 تابعِ `_resolve_database()` این بخش را می‌سازد: بدونِ متغیرِ محیطیِ `DATABASE_URL` همان **SQLite**ِ همیشگی (فایل `db.sqlite3` در ریشه‌ی `backend/`)؛ با آدرسِ `postgres://user:pass@host:port/dbname` موتورِ PostgreSQL (درایورِ psycopg در `requirements.txt`). پارامترهایِ اختیاریِ URL: `?sslmode=require`، `?conn_max_age=60` و `?host=/var/run/postgresql` (سوکتِ یونیکس). خطایِ URL یا درایورِ غایب، همانِ بوت با `ImproperlyConfigured` و پیامِ راهنما متوقف می‌شود؛ و در `DEBUG=false` رویِ SQLite یک هشدارِ یک‌خطی روی stderr چاپ می‌شود.
 
-- **`AUTH_PASSWORD_VALIDATORS`**: چهار قانونِ استانداردِ جنگو برای قدرتِ رمز عبور (شباهت به نامِ کاربری، حداقل طول، رمزهای رایج، رمزِ کاملاً عددی) که پیش از ذخیره‌ی هر رمز جدید اجرا می‌شوند.
+- **`AUTH_PASSWORD_VALIDATORS`**: چهار قانونِ استانداردِ جنگو برای قدرتِ رمز عبور (شباهت به نامِ کاربری، حداقل طول، رمزهای رایج، رمزِ کاملاً عددی). نکته (از 2026-09-10): پیش از این تاریخ فقط «تعریف» شده بودند و هیچ‌جا صدا زده نمی‌شدند؛ حالا `UserSerializer.validate` (ثبت‌نام) و ویوی `change_password` (تغییرِ رمز) هر دو `validate_password` را اجرا می‌کنند — پیام‌هایِ خطا مالِ کاتالوگِ fa/en خودِ جنگوست و با `Accept-Language` ترجمه می‌شود.
 
 - **`LANGUAGE_CODE`, `TIME_ZONE`, `USE_I18N`, `USE_TZ`**: تنظیمات بین‌المللی‌سازی و منطقه‌ی زمانی (UTC). از 2026-09-09 چندزبانیِ واقعی فعال است: `LANGUAGE_CODE='fa'` (پیام‌های اختصاصیِ پروژه فارسی‌اند و همان متنِ اصلی نمایش داده می‌شود)، `LANGUAGES=[fa, en]` (مبنای مذاکره‌ی `LocaleMiddleware` روی Accept-Language) و `LOCALE_PATHS=[BASE_DIR/'locale']` — کاتالوگِ انگلیسی در `backend/locale/en/LC_MESSAGES` (همراهِ `django.mo` کامپایل‌شده‌ی commit‌شده). پیام‌های آماده‌ی DRF/SimpleJWT هم کاتالوگِ fa خودِ کتابخانه‌ها را می‌گیرند.
 
@@ -67,7 +67,7 @@
 - **`CORS_ALLOW_ALL_ORIGINS`**: به هر دامنه/مبدأیی اجازه می‌دهد به این API درخواست بزند (پیش‌فرض، مناسبِ توسعه). از 2026-09-06 با `DJANGO_CORS_ALLOW_ALL=false` و فهرستِ مبدأهایِ مجاز در `DJANGO_ALLOWED_ORIGINS` (مثلِ `https://example.com`) به دامنه‌ی مشخصِ فرانت‌اند محدود می‌شود.
 
 - **`REST_FRAMEWORK`**: تنظیمات سراسریِ Django REST Framework. سه نکته‌ی کلیدی:
-  - `DEFAULT_AUTHENTICATION_CLASSES`: کاربر از روی توکن JWT در هدرِ `Authorization` شناسایی می‌شود.
+  - `DEFAULT_AUTHENTICATION_CLASSES`: کاربر از روی توکن JWT در هدرِ `Authorization` شناسایی می‌شود — از 2026-09-10 با کلاسِ سفارشیِ `planner.authentication.SessionInvalidatingJWTAuthentication`: همانِ `JWTAuthentication`ِ SimpleJWT + ردِ توکن‌هایِ دسترسیِ صادرشده «قبل ازِ آخرینِ تغییرِ رمزِ» کاربر (مقایسه‌یِ `iat` با `UserSecurityProfile.password_changed_at`؛ جزئیات در بخشِ ۲ و نکته‌ی ۶.۱۷ِ `AI_CONTEXT.md`).
   - `DEFAULT_PERMISSION_CLASSES`: به‌صورت پیش‌فرض هیچ درخواستی بدونِ لاگین پذیرفته نمی‌شود؛ فقط مسیرهایی مثل ثبت‌نام/ورود صراحتاً با `AllowAny` این قانون را دور می‌زنند (توضیح در بخش ۲).
   - **`DEFAULT_THROTTLE_CLASSES`/`DEFAULT_THROTTLE_RATES` (از 2026-09-10)**: محدودسازیِ نرخِ سراسری — `AnonRateThrottle` (هر IP برایِ بی‌احرازها) + `UserRateThrottle` (هر کاربرِ لاگین‌شده) + نرخِ scopeِ `auth` برایِ `AuthBurstThrottle`ِ register/login (کلاسش در `planner/throttles.py`). نرخ‌ها از `DJANGO_ANON_THROTTLE_RATE`/`DJANGO_USER_THROTTLE_RATE`/`DJANGO_AUTH_THROTTLE_RATE` با قالبِ `<عدد>/<sec|min|hour|day>` خوانده می‌شوند (قالبِ خراب = بوت با پیامِ راهنما متوقف — fail-fast)؛ پیش‌فرضِ توسعه 10000/min = مؤثراً نامحدود (الگویِ dev-safe). با `DEBUG=false` و هر سه نرخِ پیش‌فرض، هشداریِ یک‌خطی رویِ stderr چاپ می‌شود (بوت ادامه می‌یابد). شمارنده‌ها در کشِ پیش‌فرضِ جنگو (LocMemCache — هر فرایندِ گنیکورن جدا؛ جزئیاتِ صادقانه در `05_deployment.md`) نگه داشته می‌شوند.
 
@@ -130,7 +130,8 @@ User (مدل آماده‌ی جنگو)
  └── Subject (درس) — یک کاربر چند درس دارد
       └── Exam (امتحان) — یک درس چند امتحان دارد
            └── StudyLog (گزارش مطالعه) — یک امتحان چند گزارش مطالعه دارد
- └── StudyPlan (تنظیمات برنامه‌ریزی) — یک کاربر یک رکورد تنظیمات دارد (رابطه‌ی OneToOne از مایگریشنِ 0008)
+ ├── StudyPlan (تنظیمات برنامه‌ریزی) — یک کاربر یک رکورد تنظیمات دارد (رابطه‌ی OneToOne از مایگریشنِ 0008)
+└── UserSecurityProfile (پروفایلِ امنیتی — از 2026-09-10/Migrationِ 0009) — یک‌به‌یک به User؛ فقط مهرِ زمانِ آخرینِ تغییرِ رمز (`password_changed_at`) را نگه می‌دارد تا لایه‌ی احرازِ هویتِ سفارشی توکن‌هایِ «قبل ازِ تغییر» را رد کند؛ رکورد فقط با تغییرِ رمزِ موفق ساخته می‌شود (نه در ثبت‌نام) و با حذفِ کاربر CASCADE می‌شود
 ```
 
 ### کلاس `Subject`
@@ -246,6 +247,7 @@ def delete(self, *args, **kwargs):
 - **`0006_exam_notes.py`** (2026-08-29): افزودنِ فیلدِ `notes` به `Exam`.
 - **`0007_studylog_hours_deducted.py`** (2026-09-03): افزودنِ فیلدِ `hours_deducted` به `StudyLog` + عملیاتِ Backfill برای گزارش‌های قدیمی (اولین Migrationِ این پروژه که علاوه بر تغییرِ اسکیما، داده‌ی موجود را هم اصلاح می‌کند).
 - **`0008_studyplan_user_unique.py`** (2026-09-05): تبدیلِ `StudyPlan.user` به `OneToOneField` (قیدِ یکتایی) + عملیاتِ پاکسازیِ رکوردهایِ تکراریِ قدیمی قبل از اعمالِ قید (دومین Migrationِ داده-اصلاح‌کننده‌ی پروژه، پس از 0007).
+- **`0009_usersecurityprofile.py`** (2026-09-10): ساختِ جدولِ `UserSecurityProfile` (یک‌به‌یک به `User` + `password_changed_at` با پیش‌فرضِ `timezone.now`) — خالی شروع می‌کند؛ رکورد فقط با اولینِ تغییرِ رمزِ هر کاربر ساخته می‌شود.
 
 این فایل‌ها **دستی نوشته نشده‌اند** — جنگو آن‌ها را خودکار از روی تفاوتِ بینِ `models.py` فعلی و آخرین حالتِ ثبت‌شده در دیتابیس تولید می‌کند (با دستورِ `python manage.py makemigrations`). وجودِ این تاریخچه دقیقاً نشان می‌دهد مدلِ داده‌ی پروژه در طولِ توسعه چند بار به‌تدریج اصلاح شده (مثلاً هدف‌نمره بعداً اضافه شده، محدودیتِ یکتایی بعداً درست شده)، که رفتارِ طبیعیِ یک پروژه‌ی واقعی است، نه یک طراحیِ یک‌باره و کامل از ابتدا.
 

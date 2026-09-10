@@ -52,6 +52,12 @@ urlpatterns = [
     # (تا ۷ روزِ قبل از این تغییر، توکنِ خروج‌شده تا پایانِ عمرش معتبر می‌ماند).
     # این ویو هم مثلِ refresh بدونِ هدرِ Authorization در دسترس است.
     path('auth/logout/', TokenBlacklistView.as_view(), name='token_blacklist'),
+    # تغییرِ رمزِ عبور (از 2026-09-10): POST /api/auth/password/ — فقط برایِ
+    # کاربرِ لاگین‌شده (هدرِ Authorization لازم است). رمزِ فعلی + رمزِ جدید
+    # می‌گیرد؛ در صورتِ موفقیت همه‌ی نشست‌هایِ دیگر (توکن‌هایِ Refreshِ
+    # برجسته + توکن‌هایِ دسترسیِ قبل ازِ تغییر) باطل می‌شوند و جفتِ توکنِ
+    # تازه در همان پاسخ برمی‌گردد تا نشستِ همین دستگاه ادامه پیدا کند.
+    path('auth/password/', views.change_password, name='change_password'),
     path('dashboard/', views.dashboard, name='dashboard'),
     # پیش‌بینیِ هوشمند (از 2026-09-09): GET /api/predictions/ — مؤلفه‌ی
     # یادگیریِ آماری (کالیبراسیونِ تخمین‌هایِ ساعتیِ کاربر رویِ تاریخچه‌ی

@@ -468,8 +468,12 @@ _AUTH_THROTTLE_RATE = _env_throttle_rate('DJANGO_AUTH_THROTTLE_RATE', _DEV_THROT
 
 REST_FRAMEWORK = {
     # روش شناساییِ کاربر از روی هر درخواست: خواندنِ توکن JWT از هدر Authorization
+    # (از 2026-09-10 کلاسِ سفارشیِ پروژه: همانِ JWTAuthenticationِ SimpleJWT
+    # + ردِ توکن‌هایِ دسترسیِ صادرشده «قبل ازِ آخرینِ تغییرِ رمزِ» کاربر —
+    # جزئیات در planner/authentication.py؛ برایِ کاربرانی که هرگز رمز عوض
+    # نکرده‌اند رفتار دقیقاً همانِ قبلی است).
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'planner.authentication.SessionInvalidatingJWTAuthentication',
     ],
     # پیش‌فرض: هیچ درخواستی بدونِ احراز هویت پذیرفته نمی‌شود (مگر با
     # @permission_classes([AllowAny]) صراحتاً اجازه داده شود، مثل register/login)

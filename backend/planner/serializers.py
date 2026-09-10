@@ -13,6 +13,16 @@ from rest_framework import serializers
 # UniqueValidator: برای اطمینان از یکتا بودنِ یک مقدار (مثل نام کاربری) در دیتابیس
 from rest_framework.validators import UniqueValidator
 from django.contrib.auth.models import User
+# سیاستِ رمزِ عبور (از 2026-09-10): همان اعتبارسنج‌هایی که در
+# AUTH_PASSWORD_VALIDATORS تعریف شده‌اند (کوتاهی/رایج‌بودن/عددی‌بودن/
+# شباهت‌به‌مشخصاتِ کاربر) حالا در ثبت‌نام هم اجرا می‌شوند — تا این تاریخ فقط
+# «تعریف» شده بودند و هیچ‌جا صدا زده نمی‌شدند؛ یعنی ثبت‌نام با رمزِ «12345678»
+# ممکن بود.
+from django.contrib.auth.password_validation import validate_password
+# نکته‌ی جدایی: خطای اعتبارسنجیِ جنگو (با .messages) با ValidationErrorِ DRF
+# (با .detail) نامِ همسانِ ولی ساختارِ متفاوت دارد — با نامِ مستعارِ جدا ایمپورت
+# می‌شود تا در handler صریحاً تبدیل شود.
+from django.core.exceptions import ValidationError as DjangoValidationError
 from .models import Subject, Exam, StudyPlan, StudyLog
 # تابع کمکی که درصد پیشرفتِ یک درس را حساب می‌کند (تعریف‌شده در utils.py)
 from .utils import compute_subject_progress
@@ -42,6 +52,31 @@ class UserSerializer(serializers.ModelSerializer):
         # write_only یعنی رمز عبور هرگز در پاسخِ API برگردانده نمی‌شود،
         # فقط برای ورودی (هنگام ثبت‌نام) قابل‌استفاده است.
         extra_kwargs = {'password': {'write_only': True}}
+
+    def validate(self, attrs):
+        """سیاستِ رمزِ عبور (از 2026-09-10): رمزِ پیشنهادیِ ثبت‌نام باید از
+        اعتبارسنج‌هایِ AUTH_PASSWORD_VALIDATORS عبور کند.
+
+        - پیام‌هایِ خطا مالِ خودِ جنگوست و کاتالوگِ fa/en جنگو آماده است؛
+          یعنی با Accept-Language به‌طور خودکار ترجمه می‌شوند بدونِ این‌که
+          چیزی به کاتالوگِ locale/en پروژه اضافه شود.
+        - UserAttributeSimilarityValidator به مشخصاتِ کاربر (username/email)
+          نگاه می‌کند؛ چون کاربر هنوز ذخیره نشده، یک «نمونه‌ی گذرا» از User با
+          همان داده‌هایِ فرم می‌سازیم — فقط برایِ مقایسه، بدونِ ذخیره‌سازی.
+        """
+        transient_user = User(
+            username=attrs.get('username', ''),
+            email=attrs.get('email', ''),
+            first_name='',
+            last_name='',
+        )
+        try:
+            validate_password(attrs.get('password'), transient_user)
+        except DjangoValidationError as error:
+            # ساختارِ DRF: خطاهایِ فیلد به‌صورتِ {فیلد: [پیام‌ها]} — همان
+            # الگویی که فرانت‌اند برایِ username/email تکراری هم می‌بیند.
+            raise serializers.ValidationError({'password': list(error.messages)})
+        return attrs
 
     def create(self, validated_data):
         # اگر ایمیل خالی بود، کلا از دیکشنری حذفش کن که تکراری بودن رشته‌های خالی خطا ندهد

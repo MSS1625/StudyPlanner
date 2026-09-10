@@ -25,6 +25,15 @@ msgstr ""
 msgid "نام کاربری یا رمز عبور اشتباه است"
 msgstr "Incorrect username or password."
 
+msgid "رمز عبور فعلی اشتباه است."
+msgstr "Current password is incorrect."
+
+msgid "رمز عبور با موفقیت تغییر کرد؛ همه‌ی نشست‌هایِ دیگر باطل شدند."
+msgstr "Password changed successfully; all other sessions were invalidated."
+
+msgid "رمز عبور این حساب تغییر کرده است؛ لطفاً دوباره وارد شوید."
+msgstr "The password of this account has changed; please log in again."
+
 msgid "این نام کاربری قبلاً ثبت شده است."
 msgstr "This username is already registered."
 

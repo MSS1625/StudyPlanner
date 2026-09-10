@@ -15,6 +15,7 @@
 | `views.py` | `backend/planner/views.py` |
 | `urls.py` (اپلیکیشن) | `backend/planner/urls.py` |
 | `throttles.py` | `backend/planner/throttles.py` |
+| `authentication.py` | `backend/planner/authentication.py` |
 | `utils.py` | `backend/planner/utils.py` |
 | `ml.py` | `backend/planner/ml.py` |
 | `seed_demo_data.py` | `backend/planner/management/commands/seed_demo_data.py` |
@@ -130,7 +131,7 @@ router.register(r'study-plan', views.StudyPlanViewSet, basename='study-plan')
 router.register(r'study-logs', views.StudyLogViewSet, basename='studylog')
 ```
 
-سپس هفت مسیرِ باقیمانده دستی اضافه می‌شوند: `auth/register/`, `auth/login/`, `auth/refresh/`, `auth/logout/`, `dashboard/`, `predictions/` (از 2026-09-09 — مؤلفه‌ی یادگیریِ آماری؛ فقط با احرازِ هویت) و `health/` (از 2026-09-10 — پایشِ سلامت؛ عمومی و معاف از throttle). سه‌تایِ اول توابعِ ساده‌ی همین فایل‌اند؛ `auth/refresh/` اما ویویِ آماده‌ی `TokenRefreshView` از SimpleJWT است (بدنه‌ی `{"refresh": "..."}` می‌گیرد و توکنِ دسترسیِ تازه برمی‌گرداند — با چرخشِ فعال، توکنِ Refreshِ تازه هم؛ قبلی بلافاصله باطل می‌شود) و `auth/logout/` ویویِ آماده‌ی `TokenBlacklistView` است (از 2026-09-08؛ توکنِ Refreshِ داده‌شده را در لیستِ سیاه ابطال می‌کند)؛ هر دو مثلِ register/login بدونِ هدرِ Authorization در دسترس‌اند.
+سپس هشت مسیرِ باقیمانده دستی اضافه می‌شوند: `auth/register/`, `auth/login/`, `auth/refresh/`, `auth/logout/`, `auth/password/` (از 2026-09-10 — تغییرِ رمزِ عبور؛ فقط با احرازِ هویت + رمزِ فعلی), `dashboard/`, `predictions/` (از 2026-09-09 — مؤلفه‌ی یادگیریِ آماری؛ فقط با احرازِ هویت) و `health/` (از 2026-09-10 — پایشِ سلامت؛ عمومی و معاف از throttle). سه‌تایِ اول توابعِ ساده‌ی همین فایل‌اند؛ `auth/refresh/` اما ویویِ آماده‌ی `TokenRefreshView` از SimpleJWT است (بدنه‌ی `{"refresh": "..."}` می‌گیرد و توکنِ دسترسیِ تازه برمی‌گرداند — با چرخشِ فعال، توکنِ Refreshِ تازه هم؛ قبلی بلافاصله باطل می‌شود) و `auth/logout/` ویویِ آماده‌ی `TokenBlacklistView` است (از 2026-09-08؛ توکنِ Refreshِ داده‌شده را در لیستِ سیاه ابطال می‌کند)؛ هر دو مثلِ register/login بدونِ هدرِ Authorization در دسترس‌اند.
 
 **نکته‌ی فنیِ مهم که در کامنت‌های خودِ فایل هم آمده:** ترتیب اجرا حیاتی است — تمامِ فراخوانی‌های `router.register(...)` باید **پیش از** خطِ `path('', include(router.urls))` نوشته شوند. چون `router.urls` در همان لحظه‌ای که خوانده می‌شود، لیستِ نهاییِ URLها را از روی ViewSetهای *تا آن لحظه ثبت‌شده* می‌سازد؛ اگر چیزی بعد از آن ثبت شود، اصلاً به فهرستِ نهایی اضافه نمی‌شود.
 
@@ -200,7 +201,7 @@ $$
 
 ## ۲.۶ `backend/planner/tests.py` — مجموعه‌تستِ خودکار (از 2026-08-29)
 
-۱۸۵ تستِ Django/DRF روی `APITestCase` (به‌علاوهِ دو کلاسِ `TransactionTestCase` — قیدِ DB و حذفِ گزارشِ یتیم — + کلاسِ `JWTTokenRotationBlacklistTests` (چرخش/لیستِ سیاه/خروجِ سرور-محور) + کلاسِ `StudyLogConcurrencyLockTests` (قفلِ هم‌زمانی و خواندنِ تازه) + کلاسِ `SettingsEnvVarsTests` با `SimpleTestCase` برای متغیرهایِ محیطی + کلاس‌هایِ چندزبانی: `I18nAcceptLanguageTests` (۹) و `I18nCatalogIntegrityTests` (۶) + پنج کلاسِ آمادگیِ استقرار (سلامت/throttle/هدرهایِ امنیتی؛ از 2026-09-10)) که کلِ سطحِ API و الگوریتم را پوشش می‌دهند. کلاسِ پایه‌ی `BaseAPITestCase` دو کاربرِ نمونه (alice/bob) می‌سازد، متدِ `client_as(user)` کلاینتِ احراز‌هویت‌شده با **همان مسیرِ واقعیِ JWT** (توکنِ `SimpleJWT` در هدرِ `Authorization: Bearer`) برمی‌گرداند — یعنی لایه‌ی احراز هویت هم داخلِ تست‌هاست، نه دور زده‌شده با `force_authenticate` — و از 2026-09-10 `tearDown` آن کش را پاک می‌کند تا شمارنده‌هایِ throttle بینِ تست‌ها نشت نکنند.
+۲۱۴ تستِ Django/DRF روی `APITestCase` (به‌علاوهِ دو کلاسِ `TransactionTestCase` — قیدِ DB و حذفِ گزارشِ یتیم — + کلاسِ `JWTTokenRotationBlacklistTests` (چرخش/لیستِ سیاه/خروجِ سرور-محور) + کلاسِ `StudyLogConcurrencyLockTests` (قفلِ هم‌زمانی و خواندنِ تازه) + کلاسِ `SettingsEnvVarsTests` با `SimpleTestCase` برای متغیرهایِ محیطی + کلاس‌هایِ چندزبانی: `I18nAcceptLanguageTests` (۹) و `I18nCatalogIntegrityTests` (۶) + پنج کلاسِ آمادگیِ استقرار (سلامت/throttle/هدرهایِ امنیتی؛ از 2026-09-10)) که کلِ سطحِ API و الگوریتم را پوشش می‌دهند. کلاسِ پایه‌ی `BaseAPITestCase` دو کاربرِ نمونه (alice/bob) می‌سازد، متدِ `client_as(user)` کلاینتِ احراز‌هویت‌شده با **همان مسیرِ واقعیِ JWT** (توکنِ `SimpleJWT` در هدرِ `Authorization: Bearer`) برمی‌گرداند — یعنی لایه‌ی احراز هویت هم داخلِ تست‌هاست، نه دور زده‌شده با `force_authenticate` — و از 2026-09-10 `tearDown` آن کش را پاک می‌کند تا شمارنده‌هایِ throttle بینِ تست‌ها نشت نکنند.
 
 | کلاس | تعداد | پوشش |
 |---|---|---|
@@ -260,3 +261,15 @@ $$
 ---
 
 *پایان بخش ۲ از ۵. بخش ۳ به صفحاتِ رابط کاربری (HTML) می‌پردازد.*
+
+
+---
+
+## ۲.۹ `backend/planner/authentication.py` + ویویِ `change_password` — امنیتِ حسابِ کاربری (از 2026-09-10)
+
+دو قطعه‌ی مکمل:
+
+- **`SessionInvalidatingJWTAuthentication`** (فرزندِ `JWTAuthentication`ِ SimpleJWT؛ تنها عضوِ `DEFAULT_AUTHENTICATION_CLASSES`): بعد ازِ اعتبارسنجیِ امضا و یافتنِ کاربر، در `get_user` ادعایِ `iat` توکن را با `UserSecurityProfile.password_changed_at` مقایسه می‌کند — توکنِ صادرشده «قبل ازِ» آخرینِ تغییرِ رمز با ۴۰۱ و پیامِ ترجمه‌شده (code=`password_changed`) رد می‌شود. برایِ کاربرانی که رکوردِ پروفایل ندارند (هرگز رمز عوض نکرده‌اند) دقیقاً همانِ مسیرِ قبلی اجرا می‌شود. مرزِ مستندشده: توکنِ «همانِ ثانیه‌یِ» تغییر معتبر می‌مانَد (رزولوشنِ iat ثانیه است) — رگرسیون‌تست دارد.
+- **ویوی `change_password`** (`POST /api/auth/password/`؛ `IsAuthenticated` + throttleِ پیش‌فرضِ scopeِ 'user'): بدنه‌ی `{"current_password", "new_password"}`؛ لایه‌ها: چکِ رمزِ فعلی (`check_password` — ۴۰۰ ترجمه‌شده) → `validate_password` روی رمزِ جدید با کاربرِ واقعی (۴۰۰ با پیام‌هایِ سیاستِ جنگو) → اعمالِ اتمیک در `transaction.atomic`: `set_password` + سیاه‌کردنِ همه‌ی `OutstandingToken`هایِ کاربر (نه فقط توکنِ همین نشست!) + `update_or_create` پروفایل → صدورِ جفتِ توکنِ تازه در پاسخ تا نشستِ همین دستگاه ادامه یابد. نتیجه: تغییرِ رمز، «همه‌ی» دستگاه‌هایِ دیگر و توکن‌هایِ دزدیده‌شده‌یِ قبل ازِ تغییر را در همان لحظه از کار می‌اندازد.
+
+سیاستِ رمز در «ثبت‌نام» هم (از همین تاریخ) در `UserSerializer.validate` اجرا می‌شود — با یک نمونه‌یِ گذرایِ User برایِ سنجشِ شباهت به username/email (کاربر هنوز ذخیره نشده). پیام‌هایِ سیاست مالِ کاتالوگِ fa/en خودِ جنگوست؛ سه پیامِ اختصاصیِ این بخش (رمزِ فعلیِ غلط/جزئیاتِ موفقیت/پیامِ ۴۰۱ِ ابطال) در کاتالوگِ `locale/en` پروژه‌اند.

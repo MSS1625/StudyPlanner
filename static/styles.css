@@ -1099,3 +1099,84 @@ body.sidebar-open .backdrop {
         transform: translateY(0);
     }
 }
+
+
+/* ==========================================================================
+   پنجره‌ی (مودالِ) تغییرِ رمزِ عبور — از 2026-09-10
+   --------------------------------------------------------------------------
+   ساختِ DOM این پنجره با app.js انجام می‌شود (buildChangePasswordModal)؛
+   این‌جا فقط استایل است. پس‌زمینه‌ی نیمه‌شفافِ صفحه، کلیک‌های بیرون را می‌گیرد
+   (بستن با کلیک روی پس‌زمینه یا Escape) و خودِ پنجره از کلاس‌هایِ موجودِ
+   فرم (form-field) و دکمه (primary-button/ghost-button) استفاده می‌کند.
+   ========================================================================== */
+
+.pw-modal-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1200;
+    background: rgba(15, 23, 42, 0.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+
+/* [hidden] باید display:none بماند — کلاسِ flex بالادست، استایلِ پیش‌فرضِ
+   مرورگر برای hidden را باطل می‌کند و بدونِ این قاعده پنجره دیده می‌شد. */
+.pw-modal-overlay[hidden] {
+    display: none;
+}
+
+.pw-modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow);
+    width: min(440px, 100%);
+    padding: 28px;
+    animation: fadeUp 0.3s ease both;
+}
+
+.pw-modal h3 {
+    margin: 0 0 18px;
+    font-size: 1.25rem;
+    color: var(--text);
+}
+
+.pw-form {
+    display: grid;
+    gap: 16px;
+}
+
+.pw-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 4px;
+}
+
+/* خطای درونِ پنجره (رمزِ فعلیِ غلط/رمزِ ضعیف از سرور) — به‌جای Toast، چون
+   Toast در جریانِ صفحه است و زیرِ پس‌زمینه‌یِ نیمه‌شفافِ پنجره دیده نمی‌شود. */
+.pw-error {
+    margin: 0;
+    font-size: 0.9rem;
+    line-height: 1.7;
+    color: var(--danger);
+    background: rgba(239, 68, 68, 0.08);
+    border: 1px solid rgba(239, 68, 68, 0.25);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+}
+
+.pw-error[hidden] {
+    display: none;
+}
+
+/* متنِ راهنمایِ کوچکِ زیرِ فیلدها — هم در مودالِ تغییرِ رمز، هم زیرِ فیلدِ
+   رمزِ فرمِ ثبت‌نام (قواعدِ رمز از 2026-09-10). */
+.field-hint {
+    margin: 0;
+    font-size: 0.85rem;
+    line-height: 1.7;
+    color: var(--text-light);
+}

@@ -220,6 +220,19 @@ const TRANSLATIONS = {
     "تخمین شما": "Your estimate",
     "نیاز روزانه": "Daily need",
     "روزهای باقی‌مانده": "Days left",
+    // --- تغییرِ رمزِ عبور (امنیتِ حساب، از 2026-09-10) ---
+    "تغییر رمز عبور": "Change Password",
+    "تغییر رمز عبور حساب": "Change Account Password",
+    "رمز عبور فعلی": "Current password",
+    "رمز عبور جدید": "New password",
+    "تکرار رمز عبور جدید": "Confirm new password",
+    "ذخیره‌ی رمز جدید": "Save new password",
+    "انصراف": "Cancel",
+    "رمزهای جدید یکسان نیستند.": "The new passwords do not match.",
+    "رمز عبور جدید باید حداقل ۸ نویسه باشد.": "New password must be at least 8 characters.",
+    "رمز عبور باید حداقل ۸ نویسه باشد، با نام کاربری شما شبیه نباشد و از رمزهای رایج نباشد.": "Password must be at least 8 characters, not too similar to your username, and not a common password.",
+    "رمز عبور با موفقیت تغییر کرد؛ نشست‌های دیگر باطل شدند.": "Password changed successfully; other sessions were signed out.",
+    "خطا در تغییر رمز عبور.": "Error changing password.",
 };
 
 // زبانِ فعال: فقط «en» ترجمه می‌شود؛ هر مقدارِ دیگر = فارسی (پیش‌فرض)

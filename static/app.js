@@ -25,6 +25,9 @@ const endpoints = {
     // خروجِ سرور-محور (از 2026-09-08): توکنِ Refresh به سرور فرستاده می‌شود
     // تا باطل شود (لیستِ سیاه) — نه فقط پاک‌شدن از مرورگر.
     logout: '/api/auth/logout/',
+    // تغییرِ رمزِ عبور (از 2026-09-10): رمزِ فعلی + رمزِ جدید می‌فرستد؛ سرور
+    // همه‌ی نشست‌هایِ دیگر را باطل می‌کند و جفتِ توکنِ تازه در پاسخ برمی‌گرداند.
+    passwordChange: '/api/auth/password/',
     register: '/api/auth/register/',
     dashboard: '/api/dashboard/',
     subjects: '/api/subjects/',
@@ -47,6 +50,8 @@ const selectors = {
     statusText: '#statusText',
     statusDot: '#statusDot',
     logoutButton: '#logoutButton',
+    changePasswordButton: '#changePasswordButton',
+    changePasswordModal: '#changePasswordModal',
     sidebarToggle: '#sidebarToggle',
     backdrop: '#backdrop',
 };
@@ -347,6 +352,221 @@ const logout = async () => {
     window.location.href = 'login.html';
 };
 
+// ---------------------------------------------------------------------
+// تغییرِ رمزِ عبور (امنیتِ حساب — از 2026-09-10)
+// ---------------------------------------------------------------------
+// دکمه‌ی «تغییر رمز عبور» و پنجره‌یِ (مودالِ) فرمش هر دو با جاوااسکریپت
+// ساخته می‌شوند، نه در HTMLِ صفحات — چون این رابط باید در «همه‌ی» صفحاتِ
+// لاگین‌شده در دسترس باشد و هر ۷ فایلِ HTML فقط یک دکمه‌یِ خروجِ مشترک
+// دارند (#logoutButton)؛ تزریقِ کنارِ همان دکمه، یک نقطه‌یِ حقیقت می‌سازد
+// (فقط app.js) و HTMLها دست‌نخورده می‌مانند. مودال هم «تنها در لحظه‌یِ
+// باز‌شدن» ساخته می‌شود تا برچسب‌هایش با زبانِ جاری (t()) رندر شوند.
+
+// فرمِ مودال را (یک‌بار) می‌سازد و برمی‌گرداند. هیچ CSSِ جدیدِ خاصِ
+// ساختار لازم نیست — از همان کلاس‌هایِ موجودِ فرم/دکمه استفاده می‌کند و
+// پوششِ نیمه‌شفافِ صفحه فقط با چند کلاسِ pw- در styles.css.
+const buildChangePasswordModal = () => {
+    const overlay = document.createElement('div');
+    overlay.id = 'changePasswordModal';
+    overlay.className = 'pw-modal-overlay';
+    overlay.hidden = true;
+
+    const modal = document.createElement('div');
+    modal.className = 'pw-modal';
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-labelledby', 'pwModalTitle');
+
+    const title = document.createElement('h3');
+    title.id = 'pwModalTitle';
+    title.textContent = t('تغییر رمز عبور حساب');
+
+    const form = document.createElement('form');
+    form.id = 'pwForm';
+    form.className = 'pw-form';
+    form.noValidate = true; // اعتبارسنجیِ خودکارِ مرورگر خاموش؛ پیام‌هایِ ما دوزبانه‌اند
+
+    const fields = [
+        { id: 'pwCurrent', label: t('رمز عبور فعلی'), autocomplete: 'current-password' },
+        { id: 'pwNew', label: t('رمز عبور جدید'), autocomplete: 'new-password' },
+        { id: 'pwConfirm', label: t('تکرار رمز عبور جدید'), autocomplete: 'new-password' },
+    ];
+    for (const field of fields) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'form-field';
+        const label = document.createElement('label');
+        label.htmlFor = field.id;
+        label.textContent = field.label;
+        const input = document.createElement('input');
+        input.type = 'password';
+        input.id = field.id;
+        input.name = field.id;
+        input.autocomplete = field.autocomplete;
+        input.required = true;
+        input.minLength = 8;
+        wrapper.appendChild(label);
+        wrapper.appendChild(input);
+        form.appendChild(wrapper);
+    }
+
+    const hint = document.createElement('p');
+    hint.className = 'field-hint';
+    hint.textContent = t('رمز عبور باید حداقل ۸ نویسه باشد، با نام کاربری شما شبیه نباشد و از رمزهای رایج نباشد.');
+    form.appendChild(hint);
+
+    // خطای درونِ خودِ پنجره (به‌جای Toast که زیرِ پوششِ نیمه‌شفاف می‌مانَد):
+    const errorBox = document.createElement('p');
+    errorBox.id = 'pwError';
+    errorBox.className = 'pw-error';
+    errorBox.hidden = true;
+    errorBox.setAttribute('role', 'alert');
+    form.appendChild(errorBox);
+
+    const actions = document.createElement('div');
+    actions.className = 'pw-modal-actions';
+    const cancelButton = document.createElement('button');
+    cancelButton.type = 'button';
+    cancelButton.className = 'ghost-button';
+    cancelButton.id = 'pwCancel';
+    cancelButton.textContent = t('انصراف');
+    cancelButton.addEventListener('click', closeChangePasswordModal);
+    const submitButton = document.createElement('button');
+    submitButton.type = 'submit';
+    submitButton.className = 'primary-button';
+    submitButton.id = 'pwSubmit';
+    submitButton.textContent = t('ذخیره‌ی رمز جدید');
+    actions.appendChild(cancelButton);
+    actions.appendChild(submitButton);
+    form.appendChild(actions);
+
+    form.addEventListener('submit', submitChangePassword);
+
+    modal.appendChild(title);
+    modal.appendChild(form);
+    overlay.appendChild(modal);
+    // کلیک روی پس‌زمینه‌یِ نیمه‌شفاف = بستن (کلیک داخلِ خودِ مودال نبسته می‌کند)
+    overlay.addEventListener('click', (event) => {
+        if (event.target === overlay) closeChangePasswordModal();
+    });
+    document.body.appendChild(overlay);
+    return overlay;
+};
+
+const openChangePasswordModal = () => {
+    const overlay =
+        document.querySelector(selectors.changePasswordModal) ||
+        buildChangePasswordModal();
+    clearPwError();
+    overlay.hidden = false;
+    // فوکوس روی اولین فیلد تا کاربر بدونِ کلیکِ اضافه، مستقیم تایپ کند
+    const first = overlay.querySelector('#pwCurrent');
+    if (first) first.focus();
+};
+
+const setPwError = (message) => {
+    const errorBox = document.querySelector('#pwError');
+    if (!errorBox) return;
+    errorBox.textContent = message;
+    errorBox.hidden = false;
+};
+
+const clearPwError = () => {
+    const errorBox = document.querySelector('#pwError');
+    if (!errorBox) return;
+    errorBox.textContent = '';
+    errorBox.hidden = true;
+};
+
+const closeChangePasswordModal = () => {
+    const overlay = document.querySelector(selectors.changePasswordModal);
+    if (!overlay) return;
+    overlay.hidden = true;
+    // پاک‌سازیِ فیلدها و پیام‌ها برای باز‌شدنِ بعدی (رمزها هرگز در DOM نمانند)
+    overlay.querySelectorAll('input').forEach((input) => {
+        input.value = '';
+        input.disabled = false;
+    });
+    const submit = overlay.querySelector('#pwSubmit');
+    if (submit) submit.disabled = false;
+    clearPwError();
+};
+
+// ثبتِ تغییرِ رمز: اعتبارسنجیِ سریعِ سمتِ کلاینت، بعد POST به سرور.
+// در صورتِ موفقیت، جفتِ توکنِ تازه در پاسخ می‌آید و «همان‌جا» ذخیره می‌شود
+// تا نشستِ همین مرورگر بی‌وقفه ادامه یابد — همه‌ی نشست‌هایِ دیگر (دستگاه‌های
+// دیگر/توکن‌هایِ دزدیده‌شده) در همان لحظه با سمتِ سرور باطل شده‌اند.
+const submitChangePassword = async (event) => {
+    event.preventDefault();
+    const overlay = document.querySelector(selectors.changePasswordModal);
+    if (!overlay) return;
+
+    const current = overlay.querySelector('#pwCurrent')?.value ?? '';
+    const next = overlay.querySelector('#pwNew')?.value ?? '';
+    const confirm = overlay.querySelector('#pwConfirm')?.value ?? '';
+
+    // خطای تطابق/کوتاهی را همین‌جا نشان می‌دهیم (سرور هم همین‌ها را با
+    // پیام‌های خودش برمی‌گرداند؛ این فقط پرشِ سریع‌تر است).
+    if (next.length < 8) {
+        setPwError(t('رمز عبور جدید باید حداقل ۸ نویسه باشد.'));
+        return;
+    }
+    if (next !== confirm) {
+        setPwError(t('رمزهای جدید یکسان نیستند.'));
+        return;
+    }
+
+    const submitButton = overlay.querySelector('#pwSubmit');
+    if (submitButton) submitButton.disabled = true;
+    clearPwError();
+    try {
+        const body = await apiPost(endpoints.passwordChange, {
+            current_password: current,
+            new_password: next,
+        });
+        // توکن‌هایِ تازه‌یِ نشستِ جاری (پاسخِ سرور بعد از ابطالِ همه‌یِ توکن‌ها):
+        if (body?.access) setToken(body.access);
+        if (body?.refresh) setRefreshToken(body.refresh);
+        closeChangePasswordModal();
+        showToast(
+            t('رمز عبور با موفقیت تغییر کرد؛ نشست‌های دیگر باطل شدند.'),
+            'success',
+        );
+    } catch (error) {
+        // پیامِ سرور (با زبانِ درخواست از طریقِ Accept-Language ترجمه‌شده) —
+        // داخلِ خودِ پنجره، چون Toast زیرِ پوششِ نیمه‌شفاف دیده نمی‌شود:
+        setPwError(error.message || t('خطا در تغییر رمز عبور.'));
+        if (submitButton) submitButton.disabled = false;
+    }
+};
+
+// دکمه‌یِ «تغییر رمز عبور» را کنارِ دکمه‌یِ خروج (در نوارِ بالا) تزریق
+// می‌کند؛ اگر صفحه‌یِ لاگین/ثبت‌نام است (دکمه‌یِ خروج ندارد) هیچ کاری
+// نمی‌کند — تغییرِ رمز فقط برایِ کاربرِ لاگین‌شده معنا دارد.
+const injectChangePasswordButton = () => {
+    const logoutButton = document.querySelector(selectors.logoutButton);
+    if (!logoutButton) return;
+    if (document.querySelector(selectors.changePasswordButton)) return;
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'ghost-button';
+    button.id = 'changePasswordButton';
+    button.textContent = t('تغییر رمز عبور');
+    button.addEventListener('click', (event) => {
+        event.preventDefault();
+        openChangePasswordModal();
+    });
+    // قبل ازِ دکمه‌یِ خروج می‌نشیند (خروج همیشه آخرین دکمه می‌ماند):
+    logoutButton.parentNode.insertBefore(button, logoutButton);
+};
+
+// بستنِ مودال با کلیدِ Escape — رفتارِ استانداردِ پنجره‌هایِ سیستمی.
+document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    const overlay = document.querySelector(selectors.changePasswordModal);
+    if (overlay && !overlay.hidden) closeChangePasswordModal();
+});
+
 // رویدادهایی که در همه‌ی صفحات مشترک‌اند (دکمه‌ی خروج، باز/بسته‌شدنِ سایدبارِ
 // موبایل با دکمه‌ی همبرگری و کلیک روی پس‌زمینه‌ی تیره) + به‌روزرسانیِ اولیه‌ی
 // نام کاربری و وضعیتِ اتصال. تقریباً هر initXPage این تابع را صدا می‌زند.
@@ -358,6 +578,11 @@ const bindGlobalEvents = () => {
             logout();
         });
     }
+
+    // دکمه‌ی «تغییر رمز عبور» (از 2026-09-10): در همان نوارِ مشترکِ همه‌ی
+    // صفحاتِ لاگین‌شده، کنارِ دکمه‌ی خروج تزریق می‌شود (خودِ app.js می‌سازدش
+    // — HTMLها تغییر نکرده‌اند).
+    injectChangePasswordButton();
 
     const toggle = document.querySelector(selectors.sidebarToggle);
     const backdrop = document.querySelector(selectors.backdrop);
