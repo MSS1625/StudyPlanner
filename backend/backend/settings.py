@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
 import os
+import re
 from pathlib import Path
 
 from django.core.exceptions import ImproperlyConfigured
@@ -40,6 +41,63 @@ def _env_bool(name, default=False):
 def _env_list(name):
     """متغیرِ محیطیِ «جدا‌شده با کاما» را به فهرستِ تمیزشده تبدیل می‌کند."""
     return [item.strip() for item in os.environ.get(name, '').split(',') if item.strip()]
+
+
+def _env_throttle_rate(name, default):
+    """متغیرِ محیطیِ «نرخِ محدودسازی» را با اعتبارسنجیِ سخت‌گیرانه می‌خواند.
+
+    قالبِ معتبر: '<عدد>/<sec|min|hour|day>' مثلِ '20/min'. مقدارِ نامعتبر
+    (مثلِ '20/hourly' یا '20') همانِ بوت با پیامِ راهنما متوقف می‌کند —
+    الگویِ fail-fastِ DATABASE_URL: مقدارِ غلطِ محیط نباید بی‌صدا محدودسازی
+    را از کار بیندازد. بی‌مقدار → همان مقدارِ پیش‌فرضِ توسعه.
+    """
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == '':
+        return default
+    rate = raw.strip()
+    if not re.fullmatch(r'\d+/(?:sec|min|hour|day)', rate):
+        raise ImproperlyConfigured(
+            f'{name} must look like "20/min" — a number followed by one of '
+            f'/sec, /min, /hour, /day (got: {rate!r}). Leave it unset to use '
+            f'the development default ({default}).'
+        )
+    return rate
+
+
+def _env_int(name, default=0):
+    """متغیرِ محیطیِ عددیِ صحیح (مثلِ ثانیه‌هایِ HSTS) — نامعتبر = بوت با پیام.
+
+    فقط خودِ تبدیلِ int اینجا انجام می‌شود؛ قیودِ معنایی (مثلِ «نمی‌تواند
+    منفی باشد») جایِ استفاده ست می‌شود تا پیامِ خطا دقیق و محلی بماند.
+    """
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == '':
+        return default
+    try:
+        return int(raw.strip())
+    except ValueError:
+        raise ImproperlyConfigured(
+            f'{name} must be an integer number (got: {raw.strip()!r}).'
+        )
+
+
+def _env_proxy_ssl_header(name):
+    """متغیرِ «HEADER,value» را به تاپلِ SECURE_PROXY_SSL_HEADER ترجمه می‌کند.
+
+    مثلِ 'HTTP_X_FORWARDED_PROTO,https' → ('HTTP_X_FORWARDED_PROTO', 'https').
+    خالی/ست‌نشده → None (رفتارِ پیش‌فرضِ جنگو)؛ قالبِ ناقص = بوت با پیامِ
+    راهنما (fail-fast، هم‌الگویِ بالا).
+    """
+    raw = (os.environ.get(name) or '').strip()
+    if not raw:
+        return None
+    parts = [part.strip() for part in raw.split(',')]
+    if len(parts) != 2 or not all(parts):
+        raise ImproperlyConfigured(
+            f'{name} must be "HEADER,value" (comma-separated), e.g. '
+            f'"HTTP_X_FORWARDED_PROTO,https" (got: {raw!r}).'
+        )
+    return tuple(parts)
 
 
 # کلیدِ توسعه: فقط مناسبِ اجرایِ محلی است (چون در مخزنِ عمومی دیده می‌شود).
@@ -356,9 +414,58 @@ CORS_ALLOW_ALL_ORIGINS = _env_bool('DJANGO_CORS_ALLOW_ALL', default=True)
 # خالی می‌ماند چون allow-all فعال است.
 CORS_ALLOWED_ORIGINS = _env_list('DJANGO_ALLOWED_ORIGINS')
 
+# --- هدرها و تنظیماتِ امنیتیِ شرطی (از 2026-09-10) ------------------------------
+# این‌ها فقط وقتی معنا دارند که سرویس واقعاً پشتِ پروکسیِ TLS (مثلِ Nginx +
+# Certbot) قرار گرفته باشد — راهنمایِ گام‌به‌گام: 05_deployment.md.
+# الگویِ dev-safe (نکته‌ی ۶.۱۰): همه‌ی پیش‌فرض‌ها خاموش‌اند و بدونِ ست‌کردنِ
+# هیچ متغیری هیچ رفتاری عوض نمی‌شود. فعال‌کردنِ این‌ها بدونِ TLS واقعی
+# یعنی قفل‌کردنِ کاربرانِ http — عمداً انتخابی است، نه اجباری.
+
+# ریدایرکتِ http → https رویِ همه‌ی پاسخ‌ها (SecurityMiddleware)
+SECURE_SSL_REDIRECT = _env_bool('DJANGO_SECURE_SSL_REDIRECT', default=False)
+
+# فلگِ Secure رویِ کوکی‌هایِ Session و CSRF — کوکیِ Secure فقط رویِ https
+# فرستاده می‌شود (هر دو با یک متغیر؛ جدا‌کردنِشان فایده‌ی عملی نداشت)
+SESSION_COOKIE_SECURE = _env_bool('DJANGO_COOKIES_SECURE', default=False)
+CSRF_COOKIE_SECURE = _env_bool('DJANGO_COOKIES_SECURE', default=False)
+
+# HSTS: به مرورگر اعلام می‌کند «از الان به بعد فقط https» — تا انقضایِ مدتِ
+# اعلام‌شده اثرش می‌ماند و قابلِ لغوِ فوری نیست؛ فقط پشتِ TLS واقعی ست کنید
+# (مقدارِ ۰ = خاموش = پیش‌فرضِ توسعه؛ یک سال = 31536000)
+SECURE_HSTS_SECONDS = _env_int('DJANGO_HSTS_SECONDS', default=0)
+if SECURE_HSTS_SECONDS < 0:
+    raise ImproperlyConfigured(
+        'DJANGO_HSTS_SECONDS must be >= 0 (0 = HSTS off; one year = 31536000). '
+        'A negative duration is meaningless.'
+    )
+
+# جنگو از کدام هدرِ درخواست بفهمد که «این ترافیک https بوده» — پشتِ
+# Nginx (پایان‌دهنده‌ی TLS) لازم می‌شود؛ خالی = None = رفتارِ پیش‌فرضِ
+# جنگو (بدونِ پروکسی، خودِ جنگو می‌فهمد).
+SECURE_PROXY_SSL_HEADER = _env_proxy_ssl_header('DJANGO_PROXY_SSL_HEADER')
+
 # REST Framework settings
 # تنظیماتِ سراسریِ DRF: همه‌ی Viewها به‌صورت پیش‌فرض این دو رفتار را دارند
 # مگر این‌که در خودِ آن View چیز دیگری مشخص شده باشد.
+
+# محدودسازیِ نرخِ درخواست (از 2026-09-10) — دفاعِ brute-force و فشارِ ناخواسته:
+#  - anon: درخواست‌هایِ بی‌احرازِ هویت، به‌ازایِ هر IP (عملاً فقط مسیرهایِ
+#    عمومی مثل register/login/refresh؛ بقیه قبل از throttle با 401 رد
+#    می‌شوند)؛
+#  - user: درخواست‌هایِ احرازِ هویت‌شده، به‌ازایِ هر کاربر؛
+#  - auth: scopeِ ویژه‌ی register/login (planner/throttles.py) — پیشنهادِ
+#    Production سخت‌گیرانه‌ترین مقدار باشد (حدسِ رمزِ عبور اینجاست).
+# الگویِ dev-safe (نکته‌ی ۶.۱۰): بدونِ هیچ متغیری نرخ‌ها 10000/min =
+# مؤثراً نامحدودند و هیچِ رفتارِ محلی عوض نمی‌شود؛ در Production با
+# متغیرها فعال کنید (پیشنهاد: anon=120/min، user=600/min، auth=20/min).
+# شمارنده‌ها در cacheِ پیش‌فرضِ جنگو (LocMemCache، هر فرایند جدا) نگه داشته
+# می‌شوند — پشتِ چند worker گنیکورن یعنی «سقفِ هر worker»؛ جزئیاتِ صادقانه
+# در 05_deployment.md.
+_DEV_THROTTLE_RATE = '10000/min'
+_ANON_THROTTLE_RATE = _env_throttle_rate('DJANGO_ANON_THROTTLE_RATE', _DEV_THROTTLE_RATE)
+_USER_THROTTLE_RATE = _env_throttle_rate('DJANGO_USER_THROTTLE_RATE', _DEV_THROTTLE_RATE)
+_AUTH_THROTTLE_RATE = _env_throttle_rate('DJANGO_AUTH_THROTTLE_RATE', _DEV_THROTTLE_RATE)
+
 REST_FRAMEWORK = {
     # روش شناساییِ کاربر از روی هر درخواست: خواندنِ توکن JWT از هدر Authorization
     'DEFAULT_AUTHENTICATION_CLASSES': [
@@ -369,7 +476,37 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
     ],
+    # محدودسازیِ نرخِ سراسری (از 2026-09-10) — به‌ازایِ IP برایِ بی‌احرازها
+    # و به‌ازایِ کاربر برایِ احرازها؛ register/login در عوض AuthBurstThrottle
+    # (scopeِ 'auth') را دارند و /api/health/ کاملاً معاف است (throttle_classes=[]).
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': _ANON_THROTTLE_RATE,
+        'user': _USER_THROTTLE_RATE,
+        'auth': _AUTH_THROTTLE_RATE,
+    },
 }
+
+# هشدارِ یک‌خطی برایِ «Production با نرخ‌هایِ پیش‌فرضِ توسعه»: بدونِ این
+# متغیرها محدودسازیِ نرخ عملاً خاموش است (10000/min) — برایِ دمو/دفاع
+# قابل‌قبول، برایِ انتشارِ واقعی نه. مثلِ هشدارِ SQLite فقط رویِ stderr
+# می‌نویسد و بوت را متوقف نمی‌کند (سپرِ سختِ Production بالایِ همین فایل
+# سرِ جایش ایستاده است).
+if not DEBUG and (
+    _ANON_THROTTLE_RATE == _DEV_THROTTLE_RATE
+    and _USER_THROTTLE_RATE == _DEV_THROTTLE_RATE
+    and _AUTH_THROTTLE_RATE == _DEV_THROTTLE_RATE
+):
+    import sys as _sys
+    _sys.stderr.write(
+        'Warning: DJANGO_DEBUG=false is running with development-default '
+        'throttle rates (10000/min = effectively unlimited). For real '
+        'deployment set DJANGO_ANON_THROTTLE_RATE, DJANGO_USER_THROTTLE_RATE '
+        'and DJANGO_AUTH_THROTTLE_RATE (e.g. 120/min, 600/min, 20/min).\n'
+    )
 
 # JWT settings
 from datetime import timedelta

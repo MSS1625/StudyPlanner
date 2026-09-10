@@ -1,4 +1,4 @@
-# مستند فنی پروژه — بخش ۱ از ۴: پیکربندی پروژه و مدل‌های داده
+# مستند فنی پروژه — بخش ۱ از ۵: پیکربندی پروژه و مدل‌های داده
 
 **پروژه: برنامه‌ریز هوشمند مطالعه (Smart Study Planner)**
 
@@ -48,7 +48,7 @@
 
 - **`SECRET_KEY` و `DEBUG`**: کلید امنیتیِ رمزنگاریِ داخلیِ جنگو (برای امضای Session، توکن‌های CSRF و...) و حالتِ توسعه (`DEBUG=True`) که خطاهای کامل را نمایش می‌دهد و فایل‌های استاتیک را خودکار سرو می‌کند. از 2026-09-06 هر دو از متغیرهایِ محیطیِ `DJANGO_SECRET_KEY`/`DJANGO_DEBUG` خوانده می‌شوند و پیش‌فرض‌ها همانِ مقادیرِ توسعه‌اند (جدولِ متغیرها در `README.md` بخشِ ۱۰).
 - **متغیرِ محیطیِ `DATABASE_URL` (از 2026-09-09)**: موتورِ دیتابیس — بدونِ متغیر، SQLiteِ توسعه؛ با `postgres://...`، PostgreSQL (جزئیات در بولِتِ `DATABASES`؛ دستورِ انتقالِ داده با `dumpdata`/`loaddata` در `README.md` بخشِ ۱۰).
-- **متغیرهایِ محیطی (از 2026-09-06)**: `SECRET_KEY`، `DEBUG`، `ALLOWED_HOSTS`، `CORS_ALLOW_ALL_ORIGINS` و `CORS_ALLOWED_ORIGINS` از متغیرهایِ محیطیِ `DJANGO_SECRET_KEY`، `DJANGO_DEBUG`، `DJANGO_ALLOWED_HOSTS`، `DJANGO_CORS_ALLOW_ALL` و `DJANGO_ALLOWED_ORIGINS` خوانده می‌شوند؛ بدونِ هیچ متغیری همانِ مقادیرِ توسعه‌ی قبلی اعمال می‌شود (۸۹ تست بدونِ متغیر سبزند). سپرِ راه‌اندازی: در حالتِ `DEBUG=false`، کلیدِ توسعه یا `ALLOWED_HOSTS`ِ خالی، بوت را با `ImproperlyConfigured` متوقف می‌کند — همانِ ابتدا و با پیامِ راهنما، نه با خطایِ مبهم در میانه‌ی کار.
+- **متغیرهایِ محیطی (از 2026-09-06)**: `SECRET_KEY`، `DEBUG`، `ALLOWED_HOSTS`، `CORS_ALLOW_ALL_ORIGINS` و `CORS_ALLOWED_ORIGINS` از متغیرهایِ محیطیِ `DJANGO_SECRET_KEY`، `DJANGO_DEBUG`، `DJANGO_ALLOWED_HOSTS`، `DJANGO_CORS_ALLOW_ALL` و `DJANGO_ALLOWED_ORIGINS` خوانده می‌شوند؛ بدونِ هیچ متغیری همانِ مقادیرِ توسعه‌ی قبلی اعمال می‌شود (۱۸۵ تست بدونِ متغیر سبزند). سپرِ راه‌اندازی: در حالتِ `DEBUG=false`، کلیدِ توسعه یا `ALLOWED_HOSTS`ِ خالی، بوت را با `ImproperlyConfigured` متوقف می‌کند — همانِ ابتدا و با پیامِ راهنما، نه با خطایِ مبهم در میانه‌ی کار.
 
 - **`INSTALLED_APPS`**: فهرست تمام اپلیکیشن‌های فعال. شامل اپ‌های داخلیِ جنگو (`admin`, `auth`, `staticfiles`...)، کتابخانه‌های شخص‌ثالث نصب‌شده با pip (`rest_framework` برای ساختِ API، `rest_framework_simplejwt` برای احراز هویتِ JWT، `corsheaders` برای مدیریتِ درخواست‌های Cross-Origin، و `rest_framework_simplejwt.token_blacklist` — از 2026-09-08: جدول‌های لیستِ سیاهِ توکن که با یک‌بار migrate ساخته می‌شوند)، و در نهایت اپلیکیشنِ خودِ پروژه (`planner`) که تمام منطقِ دامنه در آن است.
 
@@ -66,9 +66,12 @@
 
 - **`CORS_ALLOW_ALL_ORIGINS`**: به هر دامنه/مبدأیی اجازه می‌دهد به این API درخواست بزند (پیش‌فرض، مناسبِ توسعه). از 2026-09-06 با `DJANGO_CORS_ALLOW_ALL=false` و فهرستِ مبدأهایِ مجاز در `DJANGO_ALLOWED_ORIGINS` (مثلِ `https://example.com`) به دامنه‌ی مشخصِ فرانت‌اند محدود می‌شود.
 
-- **`REST_FRAMEWORK`**: تنظیمات سراسریِ Django REST Framework. دو نکته‌ی کلیدی:
+- **`REST_FRAMEWORK`**: تنظیمات سراسریِ Django REST Framework. سه نکته‌ی کلیدی:
   - `DEFAULT_AUTHENTICATION_CLASSES`: کاربر از روی توکن JWT در هدرِ `Authorization` شناسایی می‌شود.
   - `DEFAULT_PERMISSION_CLASSES`: به‌صورت پیش‌فرض هیچ درخواستی بدونِ لاگین پذیرفته نمی‌شود؛ فقط مسیرهایی مثل ثبت‌نام/ورود صراحتاً با `AllowAny` این قانون را دور می‌زنند (توضیح در بخش ۲).
+  - **`DEFAULT_THROTTLE_CLASSES`/`DEFAULT_THROTTLE_RATES` (از 2026-09-10)**: محدودسازیِ نرخِ سراسری — `AnonRateThrottle` (هر IP برایِ بی‌احرازها) + `UserRateThrottle` (هر کاربرِ لاگین‌شده) + نرخِ scopeِ `auth` برایِ `AuthBurstThrottle`ِ register/login (کلاسش در `planner/throttles.py`). نرخ‌ها از `DJANGO_ANON_THROTTLE_RATE`/`DJANGO_USER_THROTTLE_RATE`/`DJANGO_AUTH_THROTTLE_RATE` با قالبِ `<عدد>/<sec|min|hour|day>` خوانده می‌شوند (قالبِ خراب = بوت با پیامِ راهنما متوقف — fail-fast)؛ پیش‌فرضِ توسعه 10000/min = مؤثراً نامحدود (الگویِ dev-safe). با `DEBUG=false` و هر سه نرخِ پیش‌فرض، هشداریِ یک‌خطی رویِ stderr چاپ می‌شود (بوت ادامه می‌یابد). شمارنده‌ها در کشِ پیش‌فرضِ جنگو (LocMemCache — هر فرایندِ گنیکورن جدا؛ جزئیاتِ صادقانه در `05_deployment.md`) نگه داشته می‌شوند.
+
+- **تنظیماتِ امنیتیِ شرطیِ TLS (از 2026-09-10)**: چهار تنظیم که فقط پشتِ TLSِ واقعی معنا دارند و همه خاموش/خالی پیش‌فرضند: `SECURE_SSL_REDIRECT` (ریدایرکتِ http→https از `DJANGO_SECURE_SSL_REDIRECT`)، `SESSION_COOKIE_SECURE`/`CSRF_COOKIE_SECURE` (فلگِ Secure کوکی‌ها از `DJANGO_COOKIES_SECURE`)، `SECURE_HSTS_SECONDS` (HSTS از `DJANGO_HSTS_SECONDS`؛ ۰ = خاموش؛ منفی = بوت متوقف) و `SECURE_PROXY_SSL_HEADER` (تاپلِ `HEADER,value` از `DJANGO_PROXY_SSL_HEADER`؛ جفتِ `proxy_set_header` در Nginx). راهنمایِ فعال‌سازیِ گام‌به‌گام: `05_deployment.md`.
 
 - **`SIMPLE_JWT`**: تنظیماتِ کتابخانه‌ی JWT — توکنِ «دسترسی» ۱ روز و توکنِ «تمدید» ۷ روز اعتبار دارد؛ هدر باید به‌شکلِ `Authorization: Bearer <token>` فرستاده شود. از 2026-09-08 چرخش و لیستِ سیاه فعال است: هر تمدید توکنِ Refreshِ تازه صادر می‌کند و قبلی را باطل می‌کند (`ROTATE_REFRESH_TOKENS`/`BLACKLIST_AFTER_ROTATION`)؛ خروجِ سرور-محور هم با `POST /api/auth/logout/` توکن را ابطال می‌کند.
 
@@ -248,4 +251,4 @@ def delete(self, *args, **kwargs):
 
 ---
 
-*پایان بخش ۱ از ۴. برای ادامه («منطق سرور و API»)، به فایل بعدی مراجعه کنید.*
+*پایان بخش ۱ از ۵. برای ادامه («منطق سرور و API»)، به فایل بعدی مراجعه کنید.*

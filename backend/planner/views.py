@@ -14,7 +14,9 @@ from rest_framework import viewsets, status, permissions, pagination
 # api_view: تبدیل یک تابعِ ساده‌ی پایتون به یک View قابل‌فهم برای DRF
 # permission_classes: تعیینِ این‌که چه کسی اجازه‌ی صدا زدنِ این View را دارد
 # action: برای اضافه‌کردنِ یک مسیرِ سفارشی (غیر از CRUD معمولی) به یک ViewSet
-from rest_framework.decorators import api_view, permission_classes, action
+# throttle_classes: تعیینِ کلاس‌هایِ محدودسازیِ نرخِ درخواستِ این View
+# (از 2026-09-10 — روی register/login برای دفاعِ brute-force)
+from rest_framework.decorators import api_view, permission_classes, action, throttle_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied, ValidationError, ValidationError
@@ -26,6 +28,10 @@ from django.contrib.auth import authenticate
 from django.utils.translation import gettext as _
 from django.db import IntegrityError
 from django.db import IntegrityError
+# پایشِ سلامت (از 2026-09-10): اتصالِ زندهٔ دیتابیس برای endpointِ health و
+# تنظیماتِ جاری (نمایشِ DEBUG) — هر دو فقط «خواندن» هستند.
+from django.db import connection
+from django.conf import settings
 
 from .models import Subject, Exam, StudyPlan, StudyLog
 from .serializers import UserSerializer, SubjectSerializer, ExamSerializer, StudyPlanSerializer, StudyLogSerializer
@@ -34,6 +40,9 @@ from .utils import generate_study_plan, format_plan_for_frontend, build_subject_
 # کاربر ↔ واقعیتِ ثبت‌شده» + پیش‌بینیِ ساعتِ واقعیِ موردنیاز و ریسکِ
 # عقب‌افتادن — جزئیات و محدودیت‌های مدل در planner/ml.py.
 from .ml import get_prediction_report
+# محدودسازیِ نرخِ درخواست روی مسیرهایِ احرازِ هویت (از 2026-09-10): جلوگیری از
+# حمله‌ی حدسِ رمز (brute-force) — نرخ از متغیرِ محیطیِ DJANGO_AUTH_THROTTLE_RATE.
+from .throttles import AuthBurstThrottle
 
 
 # ---------------------------------------------------------------------------
@@ -44,6 +53,10 @@ from .ml import get_prediction_report
 # AllowAny یعنی این مسیر برخلاف بقیه‌ی مسیرهای پروژه، نیازی به لاگین‌بودن ندارد
 # (طبیعی است؛ کسی که می‌خواهد ثبت‌نام کند، هنوز حسابی ندارد!)
 @permission_classes([AllowAny])
+# محدودسازیِ نرخِ ویژهٔ احرازِ هویت (از 2026-09-10): بدونِ متغیرِ محیطی،
+# نرخِ پیش‌فرض 10000/min = مؤثراً نامحدود است (رفتارِ توسعه دست‌نخورده)؛
+# در Production با DJANGO_AUTH_THROTTLE_RATE مثل '20/min' فعال می‌شود.
+@throttle_classes([AuthBurstThrottle])
 def register(request):
     # داده‌ی خام درخواست (JSON) را به سریالایزر می‌دهیم تا هم اعتبارسنجی
     # شود (یکتا بودنِ username/email) و هم بعداً برای ساختِ کاربر استفاده شود
@@ -66,6 +79,9 @@ def register(request):
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
+# همین محدودیتِ نرخِ احرازِ هویت روی login — هدفِ اصلیِ دفاعِ brute-force
+# اینجاست (حدسِ رمزِ عبور).
+@throttle_classes([AuthBurstThrottle])
 def login(request):
     username = request.data.get('username')
     password = request.data.get('password')
@@ -480,3 +496,50 @@ def predictions(request):
     settings_obj = _get_or_create_plan_settings(request.user)
     report = get_prediction_report(request.user, settings_obj.daily_available_hours)
     return Response(report)
+
+
+# ---------------------------------------------------------------------------
+# پایشِ سلامت (Health Check — 2026-09-10)
+# ---------------------------------------------------------------------------
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+# مسیرِ پایش باید همیشه در دسترس باشد — حتی وقتیِ همه‌چیز زیرِ فشار/محدودیت
+# است؛ اگر خودِ health محدود شود، «فشارِ پایش» می‌تواند سیستمِ سالم را
+# «بیمار» گزارش کند. لیستِ خالی یعنی هیچ کلاسِ throttleای روی این ویو نمی‌نشیند.
+@throttle_classes([])
+def health(request):
+    """
+    GET /api/health/ — سلامتِ سرویس برای مانیتورینگ/Load Balancer.
+
+    پاسخ ۲۰۰ یعنی فرایندِ پایتون زنده است «و» دیتابیس به یک کوئریِ ارزانِ
+    ``SELECT 1`` جواب می‌دهد؛ هر خطایِ دیتابیس → ۵۰۳. بارِ پاسخ (payload)
+    عمداً ماشین‌خوان و بدونِ gettext است (مثلِ predictions — نکتهٔ ۶.۱۴):
+
+        {"status": "ok", "database": "ok", "engine": "sqlite", "debug": false}
+
+    - engine: نامِ موتورِ فعال از connection.vendor (بدونِ ساختِ اتصالِ جدید).
+    - debug: حالتِ DEBUG فعلی — برای تشخیصِ سریعِ این‌که کدام «محیط» جواب
+      می‌دهد (dev/staging/prod)؛ اطلاعاتِ حساسی فاش نمی‌کند.
+    - این endpoint هیچ مدلِ ORM را لمس نمی‌کند تا خرابیِ یک جدول، گزارشِ
+      سلامتِ فرایند را خراب نکند — فقط اتصالِ دیتابیس چک می‌شود.
+    """
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute('SELECT 1')
+        database_status = 'ok'
+        http_status = status.HTTP_200_OK
+    except Exception:
+        # هر نوعِ خطایِ اتصال/اجرا = ناسالم؛ سلامتِ سرویس نباید به نوعِ
+        # استثنا وابسته باشد (OperationalError، InterfaceError، ...).
+        database_status = 'error'
+        http_status = status.HTTP_503_SERVICE_UNAVAILABLE
+    return Response(
+        {
+            'status': 'ok' if database_status == 'ok' else 'error',
+            'database': database_status,
+            'engine': connection.vendor,
+            'debug': settings.DEBUG,
+        },
+        status=http_status,
+    )

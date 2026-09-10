@@ -58,4 +58,8 @@ urlpatterns = [
     # StudyLogها + ریسکِ عقب‌افتادن برایِ امتحان‌هایِ آینده). مثلِ dashboard
     # فقط با لاگین در دسترس است و رشته‌هایش ماشین‌خوانند (ترجمه در فرانت‌اند).
     path('predictions/', views.predictions, name='predictions'),
+    # پایشِ سلامت (از 2026-09-10): GET /api/health/ — برای مانیتورینگ و
+    # Load Balancer؛ عمومی (بدونِ لاگین) و عمداً معاف از محدودسازیِ نرخ تا
+    # فشارِ پایش، سرویسِ سالم را «بیمار» نشان ندهد. جزئیات: views.health.
+    path('health/', views.health, name='health'),
 ]

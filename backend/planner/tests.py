@@ -42,22 +42,34 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
+from django.conf import settings as django_settings
 from django.contrib.auth.models import User
+from django.core.cache import cache
 from django.core.exceptions import ImproperlyConfigured
-from django.db import IntegrityError, connection, transaction
+from django.db import IntegrityError, OperationalError, connection, transaction
 from django.db.models.query import QuerySet
-from django.test import SimpleTestCase, TransactionTestCase
+from django.test import SimpleTestCase, TransactionTestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from rest_framework import status
 from rest_framework.test import APIClient, APITestCase
+from rest_framework.throttling import SimpleRateThrottle
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from backend.settings import BASE_DIR, _env_bool, _env_list, _resolve_database
+from backend.settings import (
+    BASE_DIR,
+    _env_bool,
+    _env_list,
+    _env_int,
+    _env_proxy_ssl_header,
+    _env_throttle_rate,
+    _resolve_database,
+)
 from .models import Subject, Exam, StudyLog, StudyPlan
 from .utils import (
     compute_subject_progress,
@@ -96,6 +108,14 @@ class BaseAPITestCase(APITestCase):
     def setUp(self):
         self.alice = User.objects.create_user(username='alice', password='pw-12345678')
         self.bob = User.objects.create_user(username='bob', password='pw-12345678')
+
+    def tearDown(self):
+        # شمارنده‌هایِ محدودسازیِ نرخ (throttle) در cacheِ مشترکِ locmem
+        # می‌مانند و کلیدشان مستقل از نرخ است؛ بدونِ پاک‌سازی، تست‌ها به
+        # ترتیبِ اجرا وابسته می‌شوند (آلودگیِ بین‌کلاسی). پاک‌سازیِ ارزان است
+        # و هیچ stateِ معناداری را از بین نمی‌برد.
+        cache.clear()
+        super().tearDown()
 
     # --- کمکی‌ها -----------------------------------------------------------
 
@@ -2412,3 +2432,432 @@ class MLPredictionsAPITests(BaseAPITestCase):
         self.assertEqual(len(bob_body['predictions']), 1)
         self.assertEqual(bob_body['predictions'][0]['subject'], 'مبانی')
         self.assertEqual(bob_body['predictions'][0]['predicted_hours'], 6.0)
+
+
+# ---------------------------------------------------------------------------
+# پایشِ سلامت: GET /api/health/ (از 2026-09-10 — آمادگیِ استقرار)
+# ---------------------------------------------------------------------------
+
+class HealthEndpointTests(BaseAPITestCase):
+    """endpoint عمومیِ سلامت — بدونِ لاگین، ماشین‌خوان و معاف از throttle.
+
+    طراحی (وفادار به نکته‌ی ۶.۱۴ AI_CONTEXT): پاسخ عمداً gettext ندارد تا
+    کاتالوگِ locale/en دست‌نخورده بماند؛ متنِ نمایشی لازم نیست چون مخاطبِ
+    این مسیر مانیتورینگ/Load Balancer است، نه کاربرِ انسانی.
+    """
+
+    def test_health_is_public_and_ok(self):
+        """بدونِ هیچ هدرِ احرازِ هویت: 200 + status=ok + database=ok."""
+        resp = self.client.get('/api/health/')
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body['status'], 'ok')
+        self.assertEqual(body['database'], 'ok')
+
+    def test_health_payload_is_machine_readable(self):
+        """دقیقاً همین چهار کلید — نه بیشتر (رشته‌ی ترجمه‌شدنی ندارد)."""
+        body = self.client.get('/api/health/').json()
+        self.assertEqual(set(body.keys()), {'status', 'database', 'engine', 'debug'})
+
+    def test_health_reports_real_engine(self):
+        """engine = موتورِ فعالِ همین محیط (sqlite در توسعه؛ postgres در PG)."""
+        body = self.client.get('/api/health/').json()
+        self.assertEqual(body['engine'], connection.vendor)
+
+    def test_health_reflects_current_debug_flag(self):
+        """debug همانِ settings.DEBUG است (تست‌رانِ جنگو آن را False می‌کند)."""
+        body = self.client.get('/api/health/').json()
+        self.assertEqual(body['debug'], django_settings.DEBUG)
+
+    def test_health_rejects_post(self):
+        """فقط GET؛ متدِ دیگر = 405 (بدونِ مصرفِ شمارنده‌ی throttle)."""
+        resp = self.client.post('/api/health/', {})
+        self.assertEqual(resp.status_code, 405)
+
+    def test_health_is_never_throttled(self):
+        """رگرسیون: حتی با نرخِ ۱/دقیقه، health مکرر نباید ۴۲۹ بگیرد.
+
+        مسیرِ پایش معاف است (throttle_classes=[]) تا فشارِ خودِ پایش،
+        سرویسِ سالم را «بیمار» گزارش نکند.
+
+        نکته‌ی مکانیکی: THROTTLE_RATES کلاسِ DRF در زمانِ import عکسِ فوری
+        (snapshot) از تنظیمات است و override_settings آن را تازه نمی‌کند؛
+        پس نرخ را مستقیماً روی خودِ کلاس patch می‌کنیم.
+        """
+        with patch.object(SimpleRateThrottle, 'THROTTLE_RATES',
+                          {'anon': '1/min', 'user': '1/min', 'auth': '1/min'}):
+            for _ in range(5):
+                resp = self.client.get('/api/health/')
+                self.assertEqual(resp.status_code, 200, 'health must stay available')
+
+    def test_health_returns_503_when_db_down(self):
+        """رگرسیون: خطایِ اتصالِ دیتابیس → ۵۰۳ِ ساخت‌یافته، نهِ ۵۰۰ِ خام."""
+        with patch('django.db.connection.cursor', side_effect=OperationalError('db down')):
+            resp = self.client.get('/api/health/')
+        self.assertEqual(resp.status_code, 503)
+        body = resp.json()
+        self.assertEqual(body['status'], 'error')
+        self.assertEqual(body['database'], 'error')
+        # بقیه‌ی گزارش حتی در خرابی هم معنادار بماند
+        self.assertEqual(body['engine'], connection.vendor)
+
+
+# ---------------------------------------------------------------------------
+# محدودسازیِ نرخِ درخواست (از 2026-09-10 — دفاعِ brute-force)
+# ---------------------------------------------------------------------------
+
+_THROTTLE_TEST_RATES = {'anon': '2/min', 'user': '2/min', 'auth': '2/min'}
+
+
+# نکته‌ی مکانیکیِ مهم: SimpleRateThrottle.THROTTLE_RATES در زمانِ importِ DRF
+# snapshot از تنظیمات است؛ api_settings.reload() (پاسخِ override_settings)
+# آن را تازه نمی‌کند — در Production مشکلی نیست (تنظیمات فقط یک‌بار خوانده
+# می‌شوند و همان snapshot معتبر است) اما در تست، نرخ‌ها را مستقیماً روی
+# کلاس patch می‌کنیم تا واقعاً کوچک شوند. نگاشتِ env→setting جداگانه در
+# ThrottleAndSecuritySettingsTests با «بوتِ واقعی» اثبات شده است.
+@patch.object(SimpleRateThrottle, 'THROTTLE_RATES', _THROTTLE_TEST_RATES)
+class ThrottlingAPITests(BaseAPITestCase):
+    """رفتارِ ۴۲۹ با نرخ‌هایِ عمداً کوچک‌شده ('2/min').
+
+    نکته‌ی جداسازی: شمارنده‌هایِ throttle در cacheِ locmem زندگی می‌کنند و
+    BaseAPITestCase.tearDown کلِ cache را بعدِ هر تست پاک می‌کند؛ هر تستِ
+    IP-محور هم IP مخصوصِ خودش را می‌فرستد (دفاعِ دولایه).
+    """
+
+    def _ghost_login(self, remote_addr=None):
+        """login با نامِ کاربریِ ناموجود: همیشه 401 و «بدونِ هشِ رمز» (سریع)."""
+        payload = {'username': 'ghost-user', 'password': 'whatever-pass'}
+        if remote_addr:
+            return self.client.post('/api/auth/login/', payload, format='json', REMOTE_ADDR=remote_addr)
+        return self.client.post('/api/auth/login/', payload, format='json')
+
+    def test_login_burst_gets_throttled(self):
+        """سه login پشتِ‌سرِ‌هم از یک IP → سومی ۴۲۹ (اولی ۴۰۱)."""
+        self.assertEqual(self._ghost_login().status_code, 401)
+        self.assertEqual(self._ghost_login().status_code, 401)
+        self.assertEqual(self._ghost_login().status_code, 429)
+
+    def test_register_burst_gets_throttled(self):
+        """همین سقف روی register — دو ثبت‌نامِ موفق، سومی ۴۲۹."""
+        for n in (1, 2):
+            resp = self.client.post(
+                '/api/auth/register/',
+                {'username': f'burst{n}', 'password': 'pw-12345678'},
+                format='json',
+            )
+            self.assertEqual(resp.status_code, 201)
+        resp = self.client.post(
+            '/api/auth/register/',
+            {'username': 'burst3', 'password': 'pw-12345678'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 429)
+
+    def test_throttle_is_per_ip(self):
+        """IP جدا = شمارنده‌ی جدا (کاربرهایِ مختلف پشتِ NAT/پروکسی)."""
+        self._ghost_login(remote_addr='10.99.0.1')
+        self._ghost_login(remote_addr='10.99.0.1')
+        blocked = self._ghost_login(remote_addr='10.99.0.1')
+        other = self._ghost_login(remote_addr='10.99.0.2')
+        self.assertEqual(blocked.status_code, 429)
+        self.assertEqual(other.status_code, 401)   # محدودیتِ IP اول، IP دوم را قفل نکند
+
+    def test_throttled_response_carries_retry_after(self):
+        """پاسخِ ۴۲۹ باید Retry-After بدهد تا کلاینتِ مهربان منتظر بماند."""
+        self._ghost_login()
+        self._ghost_login()
+        resp = self._ghost_login()
+        self.assertEqual(resp.status_code, 429)
+        self.assertIn('Retry-After', resp)
+        self.assertTrue(str(resp['Retry-After']).isdigit())
+
+    def test_user_rate_limits_data_endpoints(self):
+        """نرخِ «هر کاربر» روی مسیرهایِ داده: سومین GET همان کاربر ۴۲۹."""
+        client = self.client_as(self.alice)
+        self.assertEqual(client.get('/api/subjects/').status_code, 200)
+        self.assertEqual(client.get('/api/subjects/').status_code, 200)
+        self.assertEqual(client.get('/api/subjects/').status_code, 429)
+
+    def test_user_throttle_is_per_user(self):
+        """مصرفِ آلیس سهمِ باب را نمی‌سوزاند (کلید = کاربر، نه IP)."""
+        alice_client = self.client_as(self.alice)
+        self.assertEqual(alice_client.get('/api/subjects/').status_code, 200)
+        self.assertEqual(alice_client.get('/api/subjects/').status_code, 200)
+        self.assertEqual(alice_client.get('/api/subjects/').status_code, 429)
+        # باب از همان «IP» (127.0.0.1) می‌زند و آزاد است
+        self.assertEqual(self.client_as(self.bob).get('/api/subjects/').status_code, 200)
+
+    def test_unauthenticated_data_requests_are_401_not_429(self):
+        """مسیرهایِ محافظت‌شده قبل از throttle با 401 رد می‌شوند و شمارنده
+        scope «auth» را هم مصرف نمی‌کنند — بعد از آن‌ها login آزاد است."""
+        for _ in range(3):
+            resp = self.client.get('/api/subjects/')
+            self.assertEqual(resp.status_code, 401)
+        self.assertEqual(self._ghost_login().status_code, 401)   # نهِ 429
+
+    def test_single_login_still_works_under_tight_rates(self):
+        """ترافیکِ عادیِ یک انسان (یک login درست) زیرِ نرخِ سخت هم رد نمی‌شود."""
+        resp = self.client.post(
+            '/api/auth/login/',
+            {'username': 'alice', 'password': 'pw-12345678'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('access', resp.json())
+
+    def test_auth_throttle_window_expires(self):
+        """محدودیت موقتی است: با نرخِ '2/sec'، پس از گذرِ پنجره آزاد می‌شود."""
+        with patch.object(SimpleRateThrottle, 'THROTTLE_RATES',
+                          {'anon': '10000/min', 'user': '10000/min', 'auth': '2/sec'}):
+            self.assertEqual(self._ghost_login().status_code, 401)
+            self.assertEqual(self._ghost_login().status_code, 401)
+            self.assertEqual(self._ghost_login().status_code, 429)
+            time.sleep(1.3)                     # پنجره‌ی ۱ ثانیه‌ای بگذرد
+            self.assertEqual(self._ghost_login().status_code, 401)
+
+
+class ThrottleDevSafeDefaultsTests(BaseAPITestCase):
+    """رگرسیونِ ۶.۱۰ برایِ نرخ‌هایِ محدودسازی: با پیش‌فرضِ توسعه (10000/min)
+    هیچ ترافیکیِ معقولِ توسعه/تست نباید ۴۲۹ بگیرد — یعنی «بدونِ ست‌کردنِ هیچ
+    متغیری، همانِ رفتارِ قبل» هنوز برقرار است."""
+
+    def test_heavy_dev_traffic_never_throttled(self):
+        """۲۵ درخواستِ متوالیِ بی‌احراز + ۱۰ درخواستِ احراز‌شده: همه پاسخِ
+        عادی می‌گیرند (400/200)، هیچ‌کدام 429."""
+        for _ in range(25):
+            resp = self.client.post(
+                '/api/auth/register/',
+                {'username': 'alice', 'password': 'whatever'},   # تکراری → 400
+                format='json',
+            )
+            self.assertEqual(resp.status_code, 400)
+        client = self.client_as(self.alice)
+        for _ in range(10):
+            self.assertEqual(client.get('/api/subjects/').status_code, 200)
+
+
+# ---------------------------------------------------------------------------
+# متغیرهایِ محیطیِ نرخ‌ها و هدرهایِ امنیتی (از 2026-09-10)
+# ---------------------------------------------------------------------------
+
+class ThrottleAndSecuritySettingsTests(SimpleTestCase):
+    """متغیرهایِ محیطیِ جدید — هم‌الگویِ SettingsEnvVarsTests، دو لایه:
+
+    ۱) تستِ واحدِ توابعِ کمکیِ _env_throttle_rate/_env_int/_env_proxy_ssl_header.
+    ۲) «بوتِ واقعی» با مفسرِ جدا: اعتبارسنجیِ سخت‌گیرانه (fail-fast) و
+       مقادیرِ Production از همانِ محیطِ ساختگی.
+    """
+
+    _ENV_KEYS = (
+        'DJANGO_SECRET_KEY', 'DJANGO_DEBUG', 'DJANGO_ALLOWED_HOSTS',
+        'DJANGO_CORS_ALLOW_ALL', 'DJANGO_ALLOWED_ORIGINS', 'DATABASE_URL',
+        'DJANGO_ANON_THROTTLE_RATE', 'DJANGO_USER_THROTTLE_RATE',
+        'DJANGO_AUTH_THROTTLE_RATE', 'DJANGO_SECURE_SSL_REDIRECT',
+        'DJANGO_COOKIES_SECURE', 'DJANGO_HSTS_SECONDS',
+        'DJANGO_PROXY_SSL_HEADER',
+    )
+
+    def _boot(self, extra_env, code):
+        """مفسرِ تازه‌ای با متغیرهایِ داده‌شده بالا می‌آورد و نتیجه را برمی‌گرداند."""
+        env = os.environ.copy()
+        env['DJANGO_SETTINGS_MODULE'] = 'backend.settings'
+        for key in self._ENV_KEYS:
+            env.pop(key, None)          # نشتِ محیطِ تست به نتیجه نداشته باشد
+        env.update(extra_env)
+        return subprocess.run(
+            [sys.executable, '-c', code],
+            capture_output=True, text=True, env=env,
+            cwd=str(Path(__file__).resolve().parents[1]),   # پوشه‌ی backend/
+            timeout=90,
+        )
+
+    # ---- ۱) توابعِ کمکی ------------------------------------------------------
+
+    def test_env_throttle_rate_parsing(self):
+        """قالبِ '<عدد>/<sec|min|hour|day>'؛ فاصله‌ها trimmed؛ غلط = خطا."""
+        with patch.dict(os.environ, {'T': '30/min'}):
+            self.assertEqual(_env_throttle_rate('T', '10000/min'), '30/min')
+        with patch.dict(os.environ, {'T': ' 30/min '}):
+            self.assertEqual(_env_throttle_rate('T', '10000/min'), '30/min')
+        for bad in ('20/hourly', '20', 'abc', '30/MIN', '/min', '1.5/min', '-5/min'):
+            with patch.dict(os.environ, {'T': bad}):
+                with self.assertRaises(ImproperlyConfigured, msg=bad):
+                    _env_throttle_rate('T', '10000/min')
+        os.environ.pop('T', None)
+        self.assertEqual(_env_throttle_rate('T', '10000/min'), '10000/min')   # بی‌مقدار → default
+
+    def test_env_int_parsing(self):
+        """عددِ صحیحِ خالص؛ فاصله trimmed؛ نامعتبر = خطا؛ بی‌مقدار → default."""
+        with patch.dict(os.environ, {'T': '31536000'}):
+            self.assertEqual(_env_int('T', 0), 31536000)
+        with patch.dict(os.environ, {'T': ' 42 '}):
+            self.assertEqual(_env_int('T', 0), 42)
+        for bad in ('soon', '12.5', '1e3'):
+            with patch.dict(os.environ, {'T': bad}):
+                with self.assertRaises(ImproperlyConfigured, msg=bad):
+                    _env_int('T', 0)
+        os.environ.pop('T', None)
+        self.assertEqual(_env_int('T', 0), 0)
+        self.assertEqual(_env_int('T', 7), 7)
+
+    def test_env_proxy_ssl_header_parsing(self):
+        """'HEADER,value' → تاپل؛ خالی → None؛ قالبِ ناقص = خطا."""
+        with patch.dict(os.environ, {'T': 'HTTP_X_FORWARDED_PROTO,https'}):
+            self.assertEqual(_env_proxy_ssl_header('T'), ('HTTP_X_FORWARDED_PROTO', 'https'))
+        with patch.dict(os.environ, {'T': 'HTTP_X_FORWARDED_PROTO , https'}):
+            self.assertEqual(_env_proxy_ssl_header('T'), ('HTTP_X_FORWARDED_PROTO', 'https'))
+        for bad in ('X-Proto', 'a,b,c', 'a,', ',b'):
+            with patch.dict(os.environ, {'T': bad}):
+                with self.assertRaises(ImproperlyConfigured, msg=bad):
+                    _env_proxy_ssl_header('T')
+        os.environ.pop('T', None)
+        self.assertIsNone(_env_proxy_ssl_header('T'))
+
+    # ---- ۲) بوتِ واقعی با تنظیماتِ تازه ---------------------------------------
+
+    def test_boot_dev_defaults_unchanged(self):
+        """رگرسیونِ ۶.۱۰: بدونِ هیچ متغیری، نرخ‌ها 10000/min و هدرها خاموش."""
+        code = (
+            'import django; django.setup(); from django.conf import settings; '
+            "assert settings.REST_FRAMEWORK['DEFAULT_THROTTLE_RATES'] == "
+            "{'anon': '10000/min', 'user': '10000/min', 'auth': '10000/min'}, 'RATES'; "
+            'assert settings.SECURE_SSL_REDIRECT is False, "SSL"; '
+            'assert settings.SESSION_COOKIE_SECURE is False, "SESS"; '
+            'assert settings.CSRF_COOKIE_SECURE is False, "CSRF"; '
+            'assert settings.SECURE_HSTS_SECONDS == 0, "HSTS"; '
+            'assert settings.SECURE_PROXY_SSL_HEADER is None, "PROXY"; '
+            'print("dev-ok")'
+        )
+        result = self._boot({}, code)
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn('dev-ok', result.stdout)
+
+    def test_boot_prod_warns_on_default_throttle_rates(self):
+        """DEBUG=false با نرخ‌هایِ پیش‌فرض: بوت می‌شود ولی روی stderr هشدار."""
+        result = self._boot(
+            {'DJANGO_DEBUG': 'false', 'DJANGO_SECRET_KEY': 'p' * 64,
+             'DJANGO_ALLOWED_HOSTS': 'example.com'},
+            'import django; django.setup()',
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn('DJANGO_AUTH_THROTTLE_RATE', result.stderr)
+
+    def test_boot_prod_no_throttle_warning_when_rates_set(self):
+        """با ست‌شدنِ هر سه نرخ، همان هشدار دیگر نوشته نمی‌شود."""
+        result = self._boot(
+            {'DJANGO_DEBUG': 'false', 'DJANGO_SECRET_KEY': 'p' * 64,
+             'DJANGO_ALLOWED_HOSTS': 'example.com',
+             'DJANGO_ANON_THROTTLE_RATE': '120/min',
+             'DJANGO_USER_THROTTLE_RATE': '600/min',
+             'DJANGO_AUTH_THROTTLE_RATE': '20/min'},
+            'import django; django.setup()',
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertNotIn('throttle rates', result.stderr)
+
+    def test_boot_prod_applies_throttle_and_security_values(self):
+        """ترکیبِ کاملِ Production: نرخ‌ها + ریدایرکتِ SSL + کوکی‌هایِ Secure
+        + HSTS + هدرِ پروکسی، همه از متغیرها اعمال می‌شوند."""
+        key = 'p' * 64
+        code = (
+            'import django; django.setup(); from django.conf import settings; '
+            "assert settings.REST_FRAMEWORK['DEFAULT_THROTTLE_RATES'] == "
+            "{'anon': '120/min', 'user': '600/min', 'auth': '20/min'}, 'RATES'; "
+            'assert settings.SECURE_SSL_REDIRECT is True, "SSL"; '
+            'assert settings.SESSION_COOKIE_SECURE is True, "SESS"; '
+            'assert settings.CSRF_COOKIE_SECURE is True, "CSRF"; '
+            'assert settings.SECURE_HSTS_SECONDS == 31536000, "HSTS"; '
+            "assert settings.SECURE_PROXY_SSL_HEADER == "
+            "('HTTP_X_FORWARDED_PROTO', 'https'), 'PROXY'; "
+            'print("sec-ok")'
+        )
+        result = self._boot(
+            {'DJANGO_DEBUG': 'false', 'DJANGO_SECRET_KEY': key,
+             'DJANGO_ALLOWED_HOSTS': 'example.com',
+             'DJANGO_ANON_THROTTLE_RATE': '120/min',
+             'DJANGO_USER_THROTTLE_RATE': '600/min',
+             'DJANGO_AUTH_THROTTLE_RATE': '20/min',
+             'DJANGO_SECURE_SSL_REDIRECT': '1',
+             'DJANGO_COOKIES_SECURE': 'on',
+             'DJANGO_HSTS_SECONDS': '31536000',
+             'DJANGO_PROXY_SSL_HEADER': 'HTTP_X_FORWARDED_PROTO,https'},
+            code,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn('sec-ok', result.stdout)
+
+    def test_boot_invalid_throttle_rate_refuses_to_boot(self):
+        """نرخِ با قالبِ غلط = fail-fastِ همانِ بوت با پیامِ راهنما."""
+        result = self._boot({'DJANGO_AUTH_THROTTLE_RATE': '20/hourly'},
+                            'import django; django.setup()')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('DJANGO_AUTH_THROTTLE_RATE', result.stderr)
+
+    def test_boot_invalid_hsts_seconds_refuses_to_boot(self):
+        """HSTS غیرعددی یا منفی = بوت متوقف (منفی بی‌معناست)."""
+        for bad in ('soon', '-1'):
+            result = self._boot({'DJANGO_HSTS_SECONDS': bad},
+                                'import django; django.setup()')
+            self.assertNotEqual(result.returncode, 0, msg=bad)
+            self.assertIn('DJANGO_HSTS_SECONDS', result.stderr)
+
+    def test_boot_invalid_proxy_header_refuses_to_boot(self):
+        """هدرِ پروکسیِ ناقص = بوت متوقف با قالبِ درست در پیام."""
+        result = self._boot({'DJANGO_PROXY_SSL_HEADER': 'X-Proto'},
+                            'import django; django.setup()')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('HEADER,value', result.stderr)
+
+
+# ---------------------------------------------------------------------------
+# هدرهایِ امنیتیِ شرطی در سطحِ پاسخِ HTTP (از 2026-09-10)
+# ---------------------------------------------------------------------------
+
+class SecurityHeadersResponseTests(BaseAPITestCase):
+    """رفتارِ قابلِ مشاهده: روشن/خاموش‌کردنِ هر تنظیم، هدرِ درست می‌سازد.
+
+    روشن‌کردن‌ها اینجا با override_settings شبیه‌سازی می‌شوند (معادلِ
+    ست‌کردنِ متغیرِ محیطی — نگاشتِ env→setting در کلاسِ قبلی تست شده).
+    """
+
+    def test_hsts_header_appears_when_enabled(self):
+        """پشتِ پروکسیِ TLS (X-Forwarded-Proto: https) + HSTS روشن → هدرِ
+        Strict-Transport-Security رویِ پاسخ. جنگو هدرِ HSTS را فقط برای
+        درخواستِ امن (is_secure) می‌فرستد — همان چیزی که در Production
+        پشتِ Nginx اتفاق می‌افتد (نگاه کنید به 05_deployment.md)."""
+        with override_settings(SECURE_HSTS_SECONDS=31536000,
+                               SECURE_PROXY_SSL_HEADER=('HTTP_X_FORWARDED_PROTO', 'https')):
+            resp = self.client.get('/api/health/', HTTP_X_FORWARDED_PROTO='https')
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp['Strict-Transport-Security'].startswith('max-age=31536000'))
+
+    def test_no_hsts_header_by_default(self):
+        """رگرسیونِ ۶.۱۰: پیش‌فرضِ توسعه هیچ هدرِ HSTS نمی‌فرستد."""
+        resp = self.client.get('/api/health/')
+        self.assertNotIn('Strict-Transport-Security', resp)
+
+    def test_ssl_redirect_when_enabled(self):
+        with override_settings(SECURE_SSL_REDIRECT=True):
+            resp = self.client.get('/api/health/')
+        self.assertEqual(resp.status_code, 301)
+        self.assertTrue(resp['Location'].startswith('https://'))
+
+    def test_no_ssl_redirect_by_default(self):
+        """رگرسیونِ ۶.۱۰: پیش‌فرضِ توسعه http را به https هُل نمی‌دهد."""
+        resp = self.client.get('/api/health/')
+        self.assertEqual(resp.status_code, 200)
+
+    def test_csrf_cookie_gets_secure_flag_when_enabled(self):
+        with override_settings(CSRF_COOKIE_SECURE=True):
+            resp = self.client.get('/admin/login/')
+        cookie = resp.cookies.get('csrftoken')
+        self.assertIsNotNone(cookie, 'admin login should set a CSRF cookie')
+        self.assertTrue(cookie['secure'])
+
+    def test_csrf_cookie_not_secure_by_default(self):
+        """رگرسیونِ ۶.۱۰: کوکیِ CSRF در توسعه بدونِ فلگِ Secure می‌ماند
+        (وگرنه runserver رویِ http عملاً از کار می‌افتاد)."""
+        resp = self.client.get('/admin/login/')
+        cookie = resp.cookies.get('csrftoken')
+        self.assertIsNotNone(cookie, 'admin login should set a CSRF cookie')
+        self.assertFalse(cookie['secure'])
