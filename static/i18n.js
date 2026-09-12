@@ -233,6 +233,22 @@ const TRANSLATIONS = {
     "رمز عبور باید حداقل ۸ نویسه باشد، با نام کاربری شما شبیه نباشد و از رمزهای رایج نباشد.": "Password must be at least 8 characters, not too similar to your username, and not a common password.",
     "رمز عبور با موفقیت تغییر کرد؛ نشست‌های دیگر باطل شدند.": "Password changed successfully; other sessions were signed out.",
     "خطا در تغییر رمز عبور.": "Error changing password.",
+    // --- بازیابیِ رمزِ فراموش‌شده (از 2026-09-12) ---
+    "رمز عبور را فراموش کرده‌اید؟": "Forgot your password?",
+    "بازیابی رمز عبور | برنامه‌ریز هوشمند مطالعه": "Password Recovery | Smart Study Planner",
+    "تعیین رمز جدید": "Set a new password",
+    "رمز عبور جدید حساب خود را وارد کنید.": "Enter the new password for your account.",
+    "بازیابیِ رمزِ عبور": "Password Recovery",
+    "نام کاربری یا ایمیل": "Username or email",
+    "اگر حساب شما وجود داشته باشد، لینکِ بازیابی به ایمیلِ شما ارسال می‌شود.": "If your account exists, a recovery link will be sent to your email.",
+    "ارسالِ لینکِ بازیابی": "Send recovery link",
+    "نام کاربری یا ایمیل را وارد کنید.": "Please enter your username or email.",
+    "درخواستِ بازیابی ثبت شد.": "Recovery request submitted.",
+    "خطا در ارسالِ درخواستِ بازیابی.": "Error sending the recovery request.",
+    "بازنشانی رمز عبور": "Reset password",
+    "بازگشت به صفحه ورود": "Back to the login page",
+    "این صفحه فقط از طریقِ لینکِ ایمیلِ بازیابی معنا دارد؛ لینک را از ایمیلِ دریافتی دوباره باز کنید.": "This page only makes sense via the recovery link from your email; please reopen it from the email you received.",
+    "رمز عبور با موفقیت بازنشانی شد.": "Your password has been reset successfully.",
 };
 
 // زبانِ فعال: فقط «en» ترجمه می‌شود؛ هر مقدارِ دیگر = فارسی (پیش‌فرض)

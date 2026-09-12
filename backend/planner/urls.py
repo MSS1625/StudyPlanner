@@ -58,6 +58,14 @@ urlpatterns = [
     # برجسته + توکن‌هایِ دسترسیِ قبل ازِ تغییر) باطل می‌شوند و جفتِ توکنِ
     # تازه در همان پاسخ برمی‌گردد تا نشستِ همین دستگاه ادامه پیدا کند.
     path('auth/password/', views.change_password, name='change_password'),
+    # بازیابیِ رمزِ فراموش‌شده (از 2026-09-12) — دو مسیرِ بی‌لاگین (جزئیات و
+    # اصلِ ضدِ کشفِ حساب در docstringهایِ views.password_reset_request):
+    #   POST /api/auth/password/reset/          → «ایمیل برو» (پاسخِ عمومی)
+    #   POST /api/auth/password/reset/confirm/  → تعیینِ رمزِ جدید با uid/token
+    # مسیرِ اول AuthBurstThrottle دارد (همان register/login)؛ مسیرِ دوم رازش
+    # خودِ توکنِ امضاشده است و throttle پیش‌فرضِ anon کافی است.
+    path('auth/password/reset/', views.password_reset_request, name='password_reset_request'),
+    path('auth/password/reset/confirm/', views.password_reset_confirm, name='password_reset_confirm'),
     path('dashboard/', views.dashboard, name='dashboard'),
     # پیش‌بینیِ هوشمند (از 2026-09-09): GET /api/predictions/ — مؤلفه‌ی
     # یادگیریِ آماری (کالیبراسیونِ تخمین‌هایِ ساعتیِ کاربر رویِ تاریخچه‌ی

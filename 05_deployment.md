@@ -22,6 +22,8 @@
 | ۵.۸ | TLS با Certbot (فعال‌کردنِ هدرهایِ امنیتیِ شرطی) |
 | ۵.۹ | پایشِ سلامت (`/api/health/`) و محدودسازیِ نرخ (رفتارِ دقیق) |
 | ۵.۱۰ | فهرستِ نهاییِ بررسیِ پیش از انتشار (Checklist) |
+| ۵.۱۱ | یادداشتِ امنیتیِ حساب (تغییرِ رمز و ابطالِ نشست‌ها) |
+| ۵.۱۲ | ایمیلِ بازیابیِ رمز — SMTP |
 
 ---
 
@@ -140,6 +142,15 @@ venv/bin/python manage.py loaddata backup.json
 | `DJANGO_COOKIES_SECURE` | `false` | `1` | فلگِ Secure رویِ کوکی‌هایِ Session/CSRF |
 | `DJANGO_HSTS_SECONDS` | `0` (خاموش) | `31536000` (یک سال) | «فقط https تا یک سال» — **فقط بعد از TLS مطمئن** (قابلِ لغویِ فوری نیست) |
 | `DJANGO_PROXY_SSL_HEADER` | خالی | `HTTP_X_FORWARDED_PROTO,https` | جنگو از این هدر می‌فهمد ترافیک https بوده — با `proxy_set_header` بخشِ ۵.۷ جفت می‌شود |
+| `DJANGO_EMAIL_BACKEND` | `...console.EmailBackend` | `...smtp.EmailBackend` | موتورِ ایمیلِ بازیابیِ رمز؛ پیش‌فرضِ console = ایمیل در stdout (بدونِ SMTP) — در Production حتماً SMTP (از 2026-09-12) |
+| `DJANGO_EMAIL_HOST` | خالی | `smtp.example.com` | سرورِ SMTP (از 2026-09-12) |
+| `DJANGO_EMAIL_PORT` | `587` | `587` یا `465` | 465 = TLSِ ضمنِ اتصال (`USE_TLS=false` بگذارید) (از 2026-09-12) |
+| `DJANGO_EMAIL_HOST_USER` | خالی | `no-reply@example.com` | کاربرِ SMTP (از 2026-09-12) |
+| `DJANGO_EMAIL_HOST_PASSWORD` | خالی | رمزِ SMTP | در `.env` با `chmod 600` (از 2026-09-12) |
+| `DJANGO_EMAIL_USE_TLS` | `true` | `true` (587) / `false` (465) | STARTTLS (از 2026-09-12) |
+| `DJANGO_DEFAULT_FROM_EMAIL` | `webmaster@localhost` | `no-reply@your-domain.com` | فرستنده‌ی ایمیلهایِ سیستمی — با حسابِ SMTP هم‌خوان باشد (از 2026-09-12) |
+| `DJANGO_PASSWORD_RESET_TIMEOUT` | `3600` (یک ساعت) | `3600` | عمرِ لینکِ بازیابی به ثانیه؛ غیرمثبت = بوت متوقف (از 2026-09-12) |
+| `DJANGO_FRONTEND_BASE_URL` | `http://127.0.0.1:8000` | `https://your-domain.com` | مبدأِ لینکِ داخلِ ایمیلِ بازیابی — در Production آدرسِ عمومی (از 2026-09-12) |
 
 فرمتِ نرخ‌ها دقیقاً `<عدد>/<sec|min|hour|day>` مثلِ `20/min` است؛ مقدارِ خراب = بوت با پیامِ راهنما متوقف می‌شود (fail-fast — تستش `test_boot_invalid_throttle_rate_refuses_to_boot`).
 
@@ -344,6 +355,7 @@ curl -sI https://your-domain.com/api/health/ | grep -i strict-transport
 10. ☐ ثبت‌نام/ورود واقعی از مرورگر رویِ دامنه؛ یک login عادی و یک بورستِ ۴× پشتِ‌سرِهم برایِ دیدنِ ۴۲۹ (رفتارِ سالمِ دفاع).
 11. ☐ `journalctl -u studyplanner -e` بدونِ هشدارِ نرخِ پیش‌فرض و بدونِ خطایِ تکراری.
 12. ☐ `sudo systemctl enable studyplanner` — ری‌بوتِ سرور هم سرویس را برمی‌گرداند.
+13. ☐ ایمیلِ بازیابی: `.env` پنج متغیرِ SMTP + `DJANGO_FRONTEND_BASE_URL=https://your-domain.com`؛ ری‌استارت؛ «فراموشیِ رمز» از مرورگر = ایمیلِ واقعی با لینکِ سالم و کلیک‌پذیر (بخشِ ۵.۱۲).
 
 بعد از این فهرست، پروژه «Production-ready» بودنِ خود را عملاً نشان داده است: تمامِ آن‌چه در `README.md` بخشِ ۱۱ «کارهایِ آینده» برایِ استقرار لازم بود، همین راهنما بود.
 
@@ -357,3 +369,25 @@ curl -sI https://your-domain.com/api/health/ | grep -i strict-transport
 ## ۵.۱۱ یادداشتِ امنیتیِ حساب (از 2026-09-10)
 
 `POST /api/auth/password/` (رمزِ فعلی + رمزِ جدید) همه‌ی نشست‌هایِ دیگر را باطل می‌کند — همه‌ی توکن‌هایِ Refreshِ برجسته (لیستِ سیاه) «و» توکن‌هایِ دسترسیِ صادرشده قبل ازِ تغییر (کلاسِ `planner/authentication.py` با مقایسه‌یِ `iat`). برایِ عملیات یعنی: گزارشِ کاربرِ «رمزم لو رفته» فقط یک تغییرِ رمز فاصله دارد تا همه‌ی دستگاه‌هایِ دیگر از کار بیفتند؛ نیازی به ری‌استارتِ سرویس یا دستکاریِ دیتابیس نیست. سیاستِ رمز (حداقلِ ۸ نویسه/غیرِ رایج/...) هم در ثبت‌نام و تغییرِ رمز اجباری است — پیام‌هایش fa/en خودکار است.
+
+
+## ۵.۱۲ ایمیلِ بازیابیِ رمز — SMTP (از 2026-09-12)
+
+بازیابیِ رمزِ فراموش‌شده (`POST /api/auth/password/reset/` + لینکِ یک‌بارمصرف) تنها مصرف‌کننده‌ی ایمیلِ
+پروژه است. در توسعه موتورِ `console` لینک را در stdoutِ runserver می‌نویسد (بی‌SMTP — الگویِ dev-safe)؛
+در Production سه قدم:
+
+1. **SMTP در `.env`**: `DJANGO_EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend` + پنج متغیرِ
+   HOST/PORT/USER/PASSWORD/USE_TLS + `DJANGO_DEFAULT_FROM_EMAIL` (جدولِ ۵.۵). سرویس‌هایِ ایمیلِ رایج
+   (Gmail/SendGrid/Mailgun) همه SMTP می‌دهند؛ پورتِ 587 با STARTTLS (= `USE_TLS=true`) توصیه می‌شود.
+2. **مبدأِ لینک**: `DJANGO_FRONTEND_BASE_URL=https://your-domain.com` — لینکِ ایمیل باید به Nginxِ شما
+   بیفتد نه به 127.0.0.1.
+3. **آزمایشِ سرِانگشتی**: از مرورگر «فراموشیِ رمز» را با حسابِ واقعی اجرا کنید؛ ایمیل باید برسد و لینک،
+   صفحه‌ی `reset-password.html` را با uid/token باز کند. اگر نرسید: `journalctl -u studyplanner -e`
+   (شکستِ ارسال با سطحِ ERROR لاگ می‌شود — پاسخِ API عمداً همان پیامِ عمومی را می‌دهد؛ الگویِ ضدِ کشفِ حساب).
+
+هشدارِ صادقانه‌ی بوت: `DEBUG=false` + backendِ console = هشدارِ stderr (ایمیل به stdoutِ worker می‌رود و به
+هیچ‌کس نمی‌رسد) — بوت ادامه می‌یابد تا پیکربندیِ SMTP بعداً کامل شود ولی بازیابیِ رمز تا آن‌وقت کار نمی‌کند.
+
+---
+

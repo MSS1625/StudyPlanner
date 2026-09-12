@@ -31,6 +31,42 @@ msgstr "Current password is incorrect."
 msgid "رمز عبور با موفقیت تغییر کرد؛ همه‌ی نشست‌هایِ دیگر باطل شدند."
 msgstr "Password changed successfully; all other sessions were invalidated."
 
+# --- بازیابیِ رمزِ فراموش‌شده (views.py — از 2026-09-12) ---
+msgid "نام کاربری یا ایمیل را وارد کنید."
+msgstr "Please enter your username or email."
+
+msgid "اگر این حساب وجود داشته باشد، لینکِ بازیابی به ایمیلِ شما ارسال شد."
+msgstr "If this account exists, a recovery link has been sent to your email."
+
+msgid "هر سه فیلد uid، token و new_password لازمند."
+msgstr "All three fields uid, token and new_password are required."
+
+msgid "لینکِ بازیابی نامعتبر یا منقضی شده است."
+msgstr "The recovery link is invalid or has expired."
+
+msgid "رمز عبور با موفقیت بازنشانی شد؛ لطفاً با رمزِ جدید وارد شوید."
+msgstr "Your password has been reset successfully; please log in with your new password."
+
+msgid "بازیابیِ رمزِ عبور — برنامه‌ریزِ هوشمندِ مطالعه"
+msgstr "Password recovery — Smart Study Planner"
+
+msgid ""
+"سلام %(username)s،\n"
+"\n"
+"برایِ تعیینِ رمزِ عبورِ جدید، این لینک را در مرورگر باز کنید:\n"
+"\n"
+"%(link)s\n"
+"\n"
+"این لینک %(minutes)s دقیقه اعتبار دارد و فقط یک‌بار قابلِ استفاده است. اگر شما این درخواست را نداده‌اید، این ایمیل را نادیده بگیرید؛ رمزِ عبورِ شما تغییری نمی‌کند."
+msgstr ""
+"Hello %(username)s,\n"
+"\n"
+"To set a new password, open this link in your browser:\n"
+"\n"
+"%(link)s\n"
+"\n"
+"This link is valid for %(minutes)s minutes and can be used only once. If you did not request this, just ignore this email; your password will not change."
+
 msgid "رمز عبور این حساب تغییر کرده است؛ لطفاً دوباره وارد شوید."
 msgstr "The password of this account has changed; please log in again."
 

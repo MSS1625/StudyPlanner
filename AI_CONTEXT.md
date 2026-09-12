@@ -29,7 +29,7 @@ django-cors-headers>=4.4
 دو بخشِ کاملاً مجزا که فقط از طریق REST API (JSON روی HTTP) با هم حرف می‌زنند:
 
 - **بک‌اند**: `backend/` — یک پروژه‌ی Django با یک اپلیکیشن (`planner`)
-- **فرانت‌اند**: `static/` — ۷ صفحه‌ی HTML مستقل + یک `app.js` مشترک + یک `i18n.js` مشترک (چندزبانی؛ از 2026-09-09) + یک `styles.css` مشترک
+- **فرانت‌اند**: `static/` — ۸ صفحه‌ی HTML مستقل (هشتمین: `reset-password.html` از 2026-09-12) + یک `app.js` مشترک + یک `i18n.js` مشترک (چندزبانی؛ از 2026-09-09) + یک `styles.css` مشترک
 
 هردو با یک دستور (`python manage.py runserver`) قابل‌اجرا هستند، چون `STATICFILES_DIRS` در `settings.py` پوشه‌ی `static/` را هم زیرِ همان سرور سرو می‌کند (توضیح در README بخش ۱۰).
 
@@ -41,7 +41,7 @@ django-cors-headers>=4.4
 |---|---|
 | `models.py` | ۵ مدل: `Subject`, `Exam`, `StudyPlan`, `StudyLog`, `UserSecurityProfile` (از 2026-09-10: یک‌به‌یک به User؛ مهرِ زمانِ آخرینِ تغییرِ رمز — محرکِ ابطالِ توکن در `authentication.py`؛ نکته‌ی ۶.۱۷) |
 | `serializers.py` | تبدیل مدل↔JSON + اعتبارسنجی؛ فیلدهای محاسباتی (پیشرفت) اینجا ساخته می‌شوند |
-| `views.py` | تمام ViewSetها/Viewهای API؛ شاملِ الگوریتمِ داشبورد و برنامه‌ریزی در سطحِ درخواست |
+| `views.py` | تمام ViewSetها/Viewهای API؛ شاملِ الگوریتمِ داشبورد و برنامه‌ریزی در سطحِ درخواست؛ از 2026-09-12 تابعِ مشترکِ `_invalidate_all_sessions` (ابطالِ دولایه‌ی نشست — نکته‌ی ۶.۱۸) + دو ویوی بازیابیِ رمز (request/confirm) |
 | `urls.py` | نقشه‌ی مسیرهای اپلیکیشن (زیرِ پیشوندِ `/api/`) |
 | `utils.py` | **قلبِ الگوریتمی**: `compute_subject_progress`, `generate_study_plan`, `format_plan_for_frontend`, `build_subject_distribution` |
 | `ml.py` | مؤلفه‌ی یادگیریِ آماری (از 2026-09-09): `fit_calibration_model`/`classify_bias`/`predict_hours`/`assess_exam_risk` (خالص، بدونِ ORM) + `build_training_samples`/`get_prediction_report` (ORM؛ نکته‌ی ۶.۱۵) |
@@ -49,7 +49,7 @@ django-cors-headers>=4.4
 | `authentication.py` | کلاسِ `SessionInvalidatingJWTAuthentication` (از 2026-09-10): فرزندِ `JWTAuthentication`ِ SimpleJWT؛ در `get_user` اگر `iat` توکن < `password_changed_at` کاربر باشد ۴۰۱ با code='password_changed' (نکته‌ی ۶.۱۷) |
 | `admin.py` | ثبتِ مدل‌ها در پنلِ `/admin/` |
 | `management/commands/seed_demo_data.py` | دستورِ تولیدِ داده‌ی نمونه برای تست |
-| `tests.py` | ۲۱۴ تستِ خودکارِ Django/DRF: هشت کلاسِ API (Auth تا الگوریتم؛ Auth شامل تست‌های تمدیدِ توکن) + کلاسِ `JWTTokenRotationBlacklistTests` (چرخش/لیستِ سیاه/خروجِ سرور-محور) + کلاسِ `PaginationAPITests` (صفحه‌بندیِ اختیاری) + کلاسِ `SettingsEnvVarsTests` (متغیرهایِ محیطیِ Production؛ شاملِ بوتِ واقعیِ مفسرِ جدا) + کلاسِ `StudyPlanUniqueConstraintTests` با `TransactionTestCase` برای قیدِ DB + کلاس‌های `StudyLogConcurrencyLockTests`/`StudyLogOrphanDeleteTests` (قفلِ هم‌زمانیِ select_for_update و حذفِ یتیم؛ نکته‌ی ۶.۱۲) + کلاس‌های `DatabaseUrlSettingsTests`/`PostgresForUpdateTests` (متغیرِ DATABASE_URL + قفلِ FOR UPDATE در PostgreSQL؛ نکته‌ی ۶.۱۳) + کلاس‌های `I18nAcceptLanguageTests`/`I18nCatalogIntegrityTests` (ترجمه‌ی پیام‌ها با Accept-Language + سلامتِ کاتالوگِ locale/en؛ نکته‌ی ۶.۱۴) + کلاس‌های `MLCalibrationMathTests`/`MLTrainingDataTests`/`MLPredictionsAPITests` (ریاضیاتِ خالص + داده‌ی آموزشی + endpointِ پیش‌بینی؛ نکته‌ی ۶.۱۵) + کلاس‌های `HealthEndpointTests`/`ThrottlingAPITests`/`ThrottleDevSafeDefaultsTests`/`ThrottleAndSecuritySettingsTests`/`SecurityHeadersResponseTests` (سلامت + محدودسازیِ نرخ + هدرهایِ امنیتیِ شرطی؛ نکته‌ی ۶.۱۶) + کلاس‌های `RegisterPasswordPolicyTests`/`ChangePasswordAPITests`/`StaleAccessTokenInvalidationTests`/`UserSecurityProfileModelTests` (سیاستِ رمز + تغییرِ رمز + ابطالِ توکن‌هایِ قبل ازِ تغییر + مدلِ پروفایل؛ نکته‌ی ۶.۱۷)؛ اجرا با `python manage.py test planner` |
+| `tests.py` | ۲۴۶ تستِ خودکارِ Django/DRF: هشت کلاسِ API (Auth تا الگوریتم؛ Auth شامل تست‌های تمدیدِ توکن) + کلاسِ `JWTTokenRotationBlacklistTests` (چرخش/لیستِ سیاه/خروجِ سرور-محور) + کلاسِ `PaginationAPITests` (صفحه‌بندیِ اختیاری) + کلاسِ `SettingsEnvVarsTests` (متغیرهایِ محیطیِ Production؛ شاملِ بوتِ واقعیِ مفسرِ جدا) + کلاسِ `StudyPlanUniqueConstraintTests` با `TransactionTestCase` برای قیدِ DB + کلاس‌های `StudyLogConcurrencyLockTests`/`StudyLogOrphanDeleteTests` (قفلِ هم‌زمانیِ select_for_update و حذفِ یتیم؛ نکته‌ی ۶.۱۲) + کلاس‌های `DatabaseUrlSettingsTests`/`PostgresForUpdateTests` (متغیرِ DATABASE_URL + قفلِ FOR UPDATE در PostgreSQL؛ نکته‌ی ۶.۱۳) + کلاس‌های `I18nAcceptLanguageTests`/`I18nCatalogIntegrityTests` (ترجمه‌ی پیام‌ها با Accept-Language + سلامتِ کاتالوگِ locale/en؛ نکته‌ی ۶.۱۴) + کلاس‌های `MLCalibrationMathTests`/`MLTrainingDataTests`/`MLPredictionsAPITests` (ریاضیاتِ خالص + داده‌ی آموزشی + endpointِ پیش‌بینی؛ نکته‌ی ۶.۱۵) + کلاس‌های `HealthEndpointTests`/`ThrottlingAPITests`/`ThrottleDevSafeDefaultsTests`/`ThrottleAndSecuritySettingsTests`/`SecurityHeadersResponseTests` (سلامت + محدودسازیِ نرخ + هدرهایِ امنیتیِ شرطی؛ نکته‌ی ۶.۱۶) + کلاس‌های `RegisterPasswordPolicyTests`/`ChangePasswordAPITests`/`StaleAccessTokenInvalidationTests`/`UserSecurityProfileModelTests` (سیاستِ رمز + تغییرِ رمز + ابطالِ توکن‌هایِ قبل ازِ تغییر + مدلِ پروفایل؛ نکته‌ی ۶.۱۷) + کلاس‌های `PasswordResetRequestAPITests`/`PasswordResetThrottleTests`/`PasswordResetConfirmAPITests`/`PasswordResetSessionInvalidationTests`/`PasswordResetSettingsTests` (بازیابیِ رمز: ضدِ کشفِ حساب + ماتریسِ رد/پذیرش + یک‌بارمصرف/انقضا + ابطالِ نشست از مسیرِ کاملِ API + بوتِ واقعیِ ایمیل؛ نکته‌ی ۶.۱۸)؛ اجرا با `python manage.py test planner` |
 | `migrations/0001` تا `0008` | تاریخچه‌ی واقعیِ تکاملِ اسکیمای دیتابیس (تاریخ‌ها در `CHANGELOG.md`) |
 
 ### فرانت‌اند (`static/`)
@@ -63,7 +63,7 @@ django-cors-headers>=4.4
 | `study_plan.html` | برنامه‌ی مطالعه (`data-page="study-plan"`) |
 | `study_log.html` | ثبتِ مطالعه (`data-page="study-log"`) |
 | `app.js` | تمامِ منطقِ جاوااسکریپتی؛ روترِ سبک بر مبنایِ `data-page` در انتهای فایل |
-| `i18n.js` | زیرساختِ چندزبانیِ فرانت‌اند (از 2026-09-09): دیکشنریِ ۱۹۳ کلیدی (۱۹ کلیدِ پنلِ پیش‌بینی، 2026-09-09) + `t()` + `applyI18n()`؛ باید قبل از app.js لود شود (نکته‌ی ۶.۱۴) |
+| `i18n.js` | زیرساختِ چندزبانیِ فرانت‌اند (از 2026-09-09): دیکشنریِ ۲۲۰ کلیدی (۱۵ کلیدِ بازیابیِ رمز، 2026-09-12) + `t()` + `applyI18n()`؛ باید قبل از app.js لود شود (نکته‌ی ۶.۱۴) |
 | `styles.css` | سیستمِ طراحی؛ متغیرهای رنگ/فاصله در بالای فایل (`:root`) |
 
 ## ۵. مدل‌های داده (ساختارِ رابطه‌ای)
@@ -111,6 +111,8 @@ User → StudyPlan (1→N در سطحِ مدل، ولی در عمل هر کار�
 
 ۶.۱۷ **امنیتِ حسابِ کاربری (2026-09-10) — دو قراردادِ «رمز» را نشکن.** (۱) سیاستِ رمز در «دو» نقطه‌ی ورودیِ رمزِ جدید اجرا می‌شود: `UserSerializer.validate` (ثبت‌نام — با نمونه‌یِ گذرایِ User برایِ سنجشِ شباهت) و ویوی `change_password` (با `request.user` واقعی). پیام‌هایِ خطا مالِ خودِ جنگوند (کاتالوگِ fa/en جنگو) — «هیچ‌چیز» به کاتالوگِ locale/en پروژه برایِ این پیام‌ها اضافه نشده؛ فقط سه پیامِ اختصاصیِ change_password/ابطال در کاتالوگ هست. اگر قواعد را در یک نقطه سخت‌تر کردید، هر دو را تغییر دهید. (۲) ابطالِ نشست دو لایه دارد و «ترتیبش» حیاتی است: اول همه‌ی `OutstandingToken`هایِ کاربر سیاه + `UserSecurityProfile` با `timezone.now()`، «بعد» صدورِ جفتِ توکنِ تازه (مگر توکنِ تازه هم سیاه/رد شود). کلاسِ `planner.authentication.SessionInvalidatingJWTAuthentication` (تنها عضوِ `DEFAULT_AUTHENTICATION_CLASSES`) در `get_user` مقایسه‌ی `iat < int(password_changed_at.timestamp())` را اجرا می‌کند — علامتِ «کمترِ سخت» عمدی است تا توکنِ صادرشده در همانِ ثانیه‌یِ تغییر زنده بماند (رزولوشنِ iat ثانیه است؛ رگرسیون‌تستِ مرز: `test_same_second_edge_keeps_token_valid`)؛ آن را به `<=` تبدیل نکنید — توکنِ تازه‌ی پاسخِ تغییرِ رمز را همان لحظه می‌کُشد. کاربرانِ بدونِ رکوردِ پروفایل (هرگز رمز عوض نکرده‌اند) فقط یک SELECT کوچکِ خالی اضافه دارند — رکورد فقط در تغییرِ رمزِ موفق ساخته می‌شود؛ ساختش در ثبت‌نام ممنوع (dev-safe می‌مانَد). `change_password` فقط `IsAuthenticated` + throttleِ پیش‌فرضِ 'user' دارد (رمزِ فعلی لازم است؛ حمله‌ی حدسی رویش بی‌معناست) و `set_password` را با `update_fields=['password']` ذخیره می‌کند. رگرسیون‌تست‌ها: کلاس‌های `RegisterPasswordPolicyTests`/`ChangePasswordAPITests`/`StaleAccessTokenInvalidationTests`/`UserSecurityProfileModelTests`.
 
+۶.۱۸ **بازیابیِ رمز (2026-09-12) — سه قراردادِ غیرقابل‌مذاکره.** (۱) **پاسخِ عمومیِ ضدِ کشفِ حساب:** `password_reset_request` برایِ همه‌ی حالت‌ها (حسابِ موجودِ ایمیل‌دار / ناموجود / بدونِ ایمیل / غیرفعال) دقیقاً همان status و همان بدنه را برمی‌گرداند؛ شکستِ ارسالِ SMTP هم «ثبت و بلعیده» می‌شود (`logger.exception` — ۵۰۰ برایِ موجود و ۲۰۰ برایِ ناموجود یعنی oracle)؛ خطایِ ۴۰۰ فقط برایِ «بدونِ identifier» است که فاش‌کننده نیست. (۲) **توکنِ امضاشده، نه جدول:** uid/token از `PasswordResetTokenGenerator` جنگو می‌آیند (امضا با SECRET_KEY + هشِ وضعیتِ کاربر) — یک‌بارمصرف است چون بعد از `set_password` هش عوض می‌شود و توکن می‌میرد؛ بدونِ مایگریشن و بدونِ جدولِ توکن. (۳) **هر تغییرِ رمز = ابطالِ همه‌ی نشست‌ها + ورودِ تازه:** هر دو مسیرِ `change_password` و `password_reset_confirm` باید داخلِ `transaction.atomic` از **همان یک** تابعِ `_invalidate_all_sessions(user)` استفاده کنند (لیستِ سیاهِ همه‌ی Refreshها + مهرِ `password_changed_at`)؛ confirm عمداً **هیچ توکنی صادر نمی‌کند** (مالکیتِ ایمیل به نشستِ خودکار تبدیل نشود). تنظیمات: `EMAIL_BACKEND` پیش‌فرضِ console (dev-safe — بدونِ SMTP، لینک در stdoutِ runserver)؛ با `DEBUG=false` + console، هشدارِ stderr؛ `PASSWORD_RESET_TIMEOUT` پیش‌فرضِ ۳۶۰۰ (کوتاه‌تر از ۳ روزِ جنگو — عمدی) و غیرمثبت = fail-fastِ بوت؛ `FRONTEND_BASE_URL` مبدأِ لینک است (پیش‌فرضِ runserverِ محلی). نکته‌ی ایمیلِ فارسی: Subject طبقِ RFC 2047 base64 می‌شود (استانداردِ ایمیل — کلاینت‌هایِ واقعی برمی‌گردانندش)؛ بدنه خوانا می‌ماند. رگرسیون‌تست‌ها: کلاس‌های `PasswordResetRequestAPITests`/`PasswordResetThrottleTests`/`PasswordResetConfirmAPITests`/`PasswordResetSessionInvalidationTests`/`PasswordResetSettingsTests`.
+
 
 ## ۷. Conventions رعایت‌شده در کد
 
@@ -138,7 +140,7 @@ JWT با `djangorestframework-simplejwt`. توکنِ دسترسی: ۱ روز. ت
 | `REST_FRAMEWORK['DEFAULT_THROTTLE_*']` | نرخ‌هایِ `anon`/`user`/`auth` از متغیرهایِ محیطی؛ پیش‌فرض 10000/min | محدودسازیِ نرخ (از 2026-09-10؛ نکته‌ی ۶.۱۶) — register/login فقط scopeِ auth | 
 | `SECURE_SSL_REDIRECT`/`SESSION_COOKIE_SECURE`/`CSRF_COOKIE_SECURE`/`SECURE_HSTS_SECONDS`/`SECURE_PROXY_SSL_HEADER` | از متغیرهایِ محیطی؛ همه خاموش/خالی | فقط پشتِ TLSِ واقعی فعال شوند (از 2026-09-10؛ نکته‌ی ۶.۱۶ — راهنما: `05_deployment.md`) |
 
-پیش‌فرض‌ها عمداً «dev-safe»اند: بدونِ ست‌کردنِ هیچ متغیری، همان رفتارِ قبل برقرار است (۲۱۴ تست بدونِ متغیر سبز می‌شوند). فایلِ `.env` هنوز در ریپو وجود ندارد و کتابخانه‌ی dotenv هم اضافه نشده (در سرورِ Production با `EnvironmentFile` سرویسِ systemd تزریق می‌شود — `05_deployment.md`)؛ متغیرها با `set`/`setx` (ویندوز) یا `export` (لینوکس) ست می‌شوند — جدولِ کامل در `README.md` بخشِ ۱۰.
+پیش‌فرض‌ها عمداً «dev-safe»اند: بدونِ ست‌کردنِ هیچ متغیری، همان رفتارِ قبل برقرار است (۲۴۶ تست بدونِ متغیر سبز می‌شوند). فایلِ `.env` هنوز در ریپو وجود ندارد و کتابخانه‌ی dotenv هم اضافه نشده (در سرورِ Production با `EnvironmentFile` سرویسِ systemd تزریق می‌شود — `05_deployment.md`)؛ متغیرها با `set`/`setx` (ویندوز) یا `export` (لینوکس) ست می‌شوند — جدولِ کامل در `README.md` بخشِ ۱۰.
 
 ## ۱۰. فایل‌های مستندات مرتبط
 
@@ -147,7 +149,7 @@ JWT با `djangorestframework-simplejwt`. توکنِ دسترسی: ۱ روز. ت
 | `README.md` | معرفیِ کامل، معماری، الگوریتم، API، نصب |
 | `01_config_and_models.md` (در ریشه) | توضیحِ خط‌به‌خطِ پیکربندی و مدل‌ها |
 | `02_server_logic_and_api.md` (در ریشه) | توضیحِ خط‌به‌خطِ سریالایزر/ویو/الگوریتم |
-| `03_frontend_pages.md` (در ریشه) | توضیحِ هر ۷ صفحه‌ی HTML |
+| `03_frontend_pages.md` (در ریشه) | توضیحِ هر ۸ صفحه‌ی HTML |
 | `04_frontend_logic_and_design.md` (در ریشه) | توضیحِ `app.js` و `styles.css` |
 | `05_deployment.md` (در ریشه) | راهنمایِ گام‌به‌گامِ استقرارِ Production (از 2026-09-10): PostgreSQL + گنیکورن + systemd + Nginx + Certbot |
 | `CHANGELOG.md` | تاریخچه‌ی تغییرات |

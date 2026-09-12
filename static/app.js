@@ -28,6 +28,11 @@ const endpoints = {
     // تغییرِ رمزِ عبور (از 2026-09-10): رمزِ فعلی + رمزِ جدید می‌فرستد؛ سرور
     // همه‌ی نشست‌هایِ دیگر را باطل می‌کند و جفتِ توکنِ تازه در پاسخ برمی‌گرداند.
     passwordChange: '/api/auth/password/',
+    // بازیابیِ رمزِ فراموش‌شده (از 2026-09-12): «ایمیل برو» (identifier = نامِ
+    // کاربری یا ایمیل؛ پاسخِ همیشگیِ عمومی) و «تعیینِ رمزِ جدید» با uid/token
+    // که از لینکِ ایمیل آمده‌اند. هر دو بی‌لاگین‌اند (skipAuth).
+    passwordReset: '/api/auth/password/reset/',
+    passwordResetConfirm: '/api/auth/password/reset/confirm/',
     register: '/api/auth/register/',
     dashboard: '/api/dashboard/',
     subjects: '/api/subjects/',
@@ -52,6 +57,8 @@ const selectors = {
     logoutButton: '#logoutButton',
     changePasswordButton: '#changePasswordButton',
     changePasswordModal: '#changePasswordModal',
+    passwordResetModal: '#passwordResetModal',
+    forgotPasswordLink: '#forgotPasswordLink',
     sidebarToggle: '#sidebarToggle',
     backdrop: '#backdrop',
 };
@@ -565,7 +572,233 @@ document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
     const overlay = document.querySelector(selectors.changePasswordModal);
     if (overlay && !overlay.hidden) closeChangePasswordModal();
+    const resetOverlay = document.querySelector(selectors.passwordResetModal);
+    if (resetOverlay && !resetOverlay.hidden) closePasswordResetModal();
 });
+
+// ---------------------------------------------------------------------
+// بازیابیِ رمزِ فراموش‌شده (از 2026-09-12) — دو قطعه:
+//   ۱) مودالِ «ایمیلِ بازیابی بفرست» در صفحه‌ی ورود (لینکِ #forgotPasswordLink)
+//   ۲) صفحه‌یِ reset-password.html برایِ تعیینِ رمزِ جدید با uid/token لینک
+// ---------------------------------------------------------------------
+
+// مودالِ درخواستِ لینک — الگوی همانِ مودالِ تغییرِ رمز (کلاس‌هایِ pw- موجود؛
+// فقط در لحظه‌یِ باز‌شدن ساخته می‌شود تا برچسب‌ها با زبانِ جاری رندر شوند).
+const buildPasswordResetModal = () => {
+    const overlay = document.createElement('div');
+    overlay.id = 'passwordResetModal';
+    overlay.className = 'pw-modal-overlay';
+    overlay.hidden = true;
+
+    const modal = document.createElement('div');
+    modal.className = 'pw-modal';
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-labelledby', 'prModalTitle');
+
+    const title = document.createElement('h3');
+    title.id = 'prModalTitle';
+    title.textContent = t('بازیابیِ رمزِ عبور');
+
+    const form = document.createElement('form');
+    form.id = 'prForm';
+    form.className = 'pw-form';
+    form.noValidate = true; // اعتبارسنجیِ خودکارِ مرورگر خاموش؛ پیام‌هایِ ما دوزبانه‌اند
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'form-field';
+    const label = document.createElement('label');
+    label.htmlFor = 'prIdentifier';
+    label.textContent = t('نام کاربری یا ایمیل');
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.id = 'prIdentifier';
+    input.name = 'identifier';
+    input.autocomplete = 'username'; // شاید نامِ کاربری باشد؛ مرورگر پرشِ سریع بدهد
+    input.required = true;
+    input.autofocus = true;
+    wrapper.appendChild(label);
+    wrapper.appendChild(input);
+    form.appendChild(wrapper);
+
+    const hint = document.createElement('p');
+    hint.className = 'field-hint';
+    hint.textContent = t(
+        'اگر حساب شما وجود داشته باشد، لینکِ بازیابی به ایمیلِ شما ارسال می‌شود.',
+    );
+    form.appendChild(hint);
+
+    // خطای درونِ خودِ پنجره (به‌جای Toast که زیرِ پوششِ نیمه‌شفاف می‌مانَد):
+    const errorBox = document.createElement('p');
+    errorBox.id = 'prError';
+    errorBox.className = 'pw-error';
+    errorBox.hidden = true;
+    errorBox.setAttribute('role', 'alert');
+    form.appendChild(errorBox);
+
+    const actions = document.createElement('div');
+    actions.className = 'pw-modal-actions';
+    const cancelButton = document.createElement('button');
+    cancelButton.type = 'button';
+    cancelButton.className = 'ghost-button';
+    cancelButton.id = 'prCancel';
+    cancelButton.textContent = t('انصراف');
+    cancelButton.addEventListener('click', closePasswordResetModal);
+    const submitButton = document.createElement('button');
+    submitButton.type = 'submit';
+    submitButton.className = 'primary-button';
+    submitButton.id = 'prSubmit';
+    submitButton.textContent = t('ارسالِ لینکِ بازیابی');
+    actions.appendChild(cancelButton);
+    actions.appendChild(submitButton);
+    form.appendChild(actions);
+
+    form.addEventListener('submit', submitPasswordResetRequest);
+
+    modal.appendChild(title);
+    modal.appendChild(form);
+    overlay.appendChild(modal);
+    // کلیک روی پس‌زمینه‌یِ نیمه‌شفاف = بستن (کلیک داخلِ خودِ مودال نبسته می‌کند)
+    overlay.addEventListener('click', (event) => {
+        if (event.target === overlay) closePasswordResetModal();
+    });
+    document.body.appendChild(overlay);
+    return overlay;
+};
+
+const setPrError = (message) => {
+    const errorBox = document.querySelector('#prError');
+    if (!errorBox) return;
+    errorBox.textContent = message;
+    errorBox.hidden = false;
+};
+
+const clearPrError = () => {
+    const errorBox = document.querySelector('#prError');
+    if (!errorBox) return;
+    errorBox.textContent = '';
+    errorBox.hidden = true;
+};
+
+const openPasswordResetModal = () => {
+    const overlay =
+        document.querySelector(selectors.passwordResetModal) ||
+        buildPasswordResetModal();
+    clearPrError();
+    overlay.hidden = false;
+    // فوکوس روی فیلد تا کاربر بدونِ کلیکِ اضافه، مستقیم تایپ کند
+    const first = overlay.querySelector('#prIdentifier');
+    if (first) first.focus();
+};
+
+const closePasswordResetModal = () => {
+    const overlay = document.querySelector(selectors.passwordResetModal);
+    if (!overlay) return;
+    overlay.hidden = true;
+    // پاک‌سازیِ فیلد و پیام‌ها برای باز‌شدنِ بعدی
+    const input = overlay.querySelector('#prIdentifier');
+    if (input) input.value = '';
+    const submit = overlay.querySelector('#prSubmit');
+    if (submit) submit.disabled = false;
+    clearPrError();
+};
+
+// ارسالِ درخواست: identifier → POST. پاسخِ سرور عمداً «عمومی» است (نمی‌گوید
+// حساب وجود داشت یا نه — ضدِ کشفِ حساب)؛ همان متن را بی‌واسطه نشان می‌دهیم
+// و پنجره را می‌بندیم. اگر کاربر ایمیل ندارد، متنِ همین پیام است که به او
+// می‌رسد (ایمیلِ جایی نمی‌رود) — صداقتِ طراحی در سمتِ سرور مستند شده.
+const submitPasswordResetRequest = async (event) => {
+    event.preventDefault();
+    const overlay = document.querySelector(selectors.passwordResetModal);
+    if (!overlay) return;
+
+    const identifier = (overlay.querySelector('#prIdentifier')?.value ?? '').trim();
+    if (!identifier) {
+        setPrError(t('نام کاربری یا ایمیل را وارد کنید.'));
+        return;
+    }
+
+    const submitButton = overlay.querySelector('#prSubmit');
+    if (submitButton) submitButton.disabled = true;
+    clearPrError();
+    try {
+        const body = await apiPost(
+            endpoints.passwordReset,
+            { identifier },
+            { skipAuth: true },
+        );
+        closePasswordResetModal();
+        // پیامِ سرور (با زبانِ درخواست از طریقِ Accept-Language ترجمه‌شده):
+        showToast(body?.detail || t('درخواستِ بازیابی ثبت شد.'), 'info');
+    } catch (error) {
+        setPrError(error.message || t('خطا در ارسالِ درخواستِ بازیابی.'));
+        if (submitButton) submitButton.disabled = false;
+    }
+};
+
+// صفحه‌یِ reset-password.html: uid و token از query string می‌آیند (لینکِ
+// ایمیل). بدونِ آن‌ها فرم بی‌معناست — خطای صریح + غیرفعال‌کردنِ فرم. در
+// موفقیت، سرور رمز را عوض کرده و همه‌ی نشست‌ها را باطل کرده است؛ ما فقط
+// پیام را نشان می‌دهیم و بعد از یک مکثِ کوتاه به صفحه‌ی ورود می‌بریم.
+const handlePasswordReset = () => {
+    const form = document.getElementById('resetPasswordForm');
+    if (!form) return;
+
+    const params = new URLSearchParams(window.location.search);
+    const uid = params.get('uid') || '';
+    const token = params.get('token') || '';
+
+    if (!uid || !token) {
+        const error = document.getElementById('resetLinkError');
+        if (error) {
+            error.textContent = t(
+                'این صفحه فقط از طریقِ لینکِ ایمیلِ بازیابی معنا دارد؛ لینک را از ایمیلِ دریافتی دوباره باز کنید.',
+            );
+            error.hidden = false;
+        }
+        // ارسالِ فرمِ بدونِ لینک فقط خطایِ سرورِ تکراری می‌شود — قفل می‌کنیم:
+        const submit = document.getElementById('resetActionBtn');
+        if (submit) submit.disabled = true;
+        return;
+    }
+
+    form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const next = form.new_password.value;
+        const confirm = form.confirm_password.value;
+
+        if (next.length < 8) {
+            showToast(t('رمز عبور جدید باید حداقل ۸ نویسه باشد.'), 'error');
+            return;
+        }
+        if (next !== confirm) {
+            showToast(t('رمزهای جدید یکسان نیستند.'), 'error');
+            return;
+        }
+
+        const submitButton = document.getElementById('resetActionBtn');
+        if (submitButton) submitButton.disabled = true;
+        try {
+            const body = await apiPost(
+                endpoints.passwordResetConfirm,
+                { uid, token, new_password: next },
+                { skipAuth: true },
+            );
+            showToast(
+                body?.detail || t('رمز عبور با موفقیت بازنشانی شد.'),
+                'success',
+            );
+            // مکثِ خواندنی برایِ دیدنِ پیام، بعد هدایت به ورود (ورودِ تازه لازم
+            // است — بازیابیِ موفق عمداً توکن صادر نمی‌کند):
+            setTimeout(() => {
+                window.location.href = 'login.html';
+            }, 2000);
+        } catch (error) {
+            showToast(error.message, 'error');
+            if (submitButton) submitButton.disabled = false;
+        }
+    });
+};
 
 // رویدادهایی که در همه‌ی صفحات مشترک‌اند (دکمه‌ی خروج، باز/بسته‌شدنِ سایدبارِ
 // موبایل با دکمه‌ی همبرگری و کلیک روی پس‌زمینه‌ی تیره) + به‌روزرسانیِ اولیه‌ی
@@ -1319,6 +1552,16 @@ const handleLogin = () => {
         showToast(t('نشست شما منقضی شده بود؛ لطفاً دوباره وارد شوید.'), 'info');
     }
 
+    // لینکِ «رمز را فراموش کرده‌اید؟» (از 2026-09-12): مودالِ درخواستِ لینکِ
+    // بازیابی — فقط در همین صفحه معنا دارد و همین‌جا بسته می‌شود.
+    const forgotLink = document.querySelector(selectors.forgotPasswordLink);
+    if (forgotLink) {
+        forgotLink.addEventListener('click', (event) => {
+            event.preventDefault(); // href="#" فقط برایِ دسترس‌پذیری است
+            openPasswordResetModal();
+        });
+    }
+
     form.addEventListener('submit', async (event) => {
         event.preventDefault();
         const username = form.username.value.trim();
@@ -1624,6 +1867,9 @@ document.addEventListener('DOMContentLoaded', () => {
             break;
         case 'register':
             handleRegister();
+            break;
+        case 'reset-password':
+            handlePasswordReset();
             break;
         case 'dashboard':
             initDashboardPage();

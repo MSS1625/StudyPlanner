@@ -27,17 +27,24 @@ from rest_framework_simplejwt.tokens import RefreshToken
 # (خروجِ تک‌توکنیِ /api/auth/logout/ فقط یکی را می‌بندد).
 from rest_framework_simplejwt.token_blacklist.models import OutstandingToken, BlacklistedToken
 from django.contrib.auth import authenticate
+from django.contrib.auth.models import User
+from django.contrib.auth.tokens import default_token_generator
 # سیاستِ رمزِ عبور (از 2026-09-10): اعتبارسنج‌هایِ AUTH_PASSWORD_VALIDATORS
 # روی رمزِ جدیدِ تغییرِ رمز هم اجرا می‌شوند (پیام‌ها مالِ جنگو — ترجمه‌ی fa/en
 # خودکار). خطای جنگو با نامِ مستعارِ جدا تا با ValidationErrorِ DRF اشتباه نشود.
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.core.mail import send_mail
 # timezone.now (از 2026-09-10): مهرِ زمانِ تغییرِ رمز در UserSecurityProfile
 from django.utils import timezone
 # gettext (از 2026-09-09): پیام‌هایِ API با زبانِ درخواست (Accept-Language)
 # ترجمه می‌شوند؛ متنِ اصلی فارسی است و کاتالوگِ en ترجمه‌ی انگلیسی را می‌دهد.
 from django.utils.translation import gettext as _
+# بازیابیِ رمز (از 2026-09-12): uid امنِ base64 (بدون افشای pk خام در URL) و
+# مولدِ توکنِ امضاشده‌ی جنگو — جزئیات در password_reset_request پایین‌تر.
+from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.db import IntegrityError, transaction
+from django.db.models import Q
 # پایشِ سلامت (از 2026-09-10): اتصالِ زندهٔ دیتابیس برای endpointِ health و
 # تنظیماتِ جاری (نمایشِ DEBUG) — هر دو فقط «خواندن» هستند.
 from django.db import connection
@@ -108,6 +115,37 @@ def login(request):
     return Response({'error': _('نام کاربری یا رمز عبور اشتباه است')}, status=status.HTTP_401_UNAUTHORIZED)
 
 
+# ---------------------------------------------------------------------------
+# کمکیِ مشترکِ «ابطالِ همه‌ی نشست‌ها» (از 2026-09-12 از دلِ change_password
+# استخراج شد چون بازیابیِ رمز هم دقیقاً همان کار را لازم دارد)
+# ---------------------------------------------------------------------------
+
+def _invalidate_all_sessions(user):
+    """همه‌ی نشست‌هایِ کاربر را باطل می‌کند — دو مسیرِ هم‌زمان:
+
+    ۱) همه‌ی توکن‌هایِ Refreshِ برجسته لیست‌سیاه می‌شوند (مسیرِ «تمدید»
+       بسته می‌شود — توکنِ دزدیده‌شده دیگر قابلِ نوسازی نیست).
+    ۲) UserSecurityProfile.password_changed_at ثبت می‌شود تا لایه‌ی
+       planner/authentication.py توکن‌هایِ «دسترسیِ» صادرشده قبل از این
+       لحظه را هم رد کند (توکنِ JWT بی‌حالت است و مگر با این پیچِ دولایه
+       تا پایانِ عمرش زنده می‌ماند).
+
+    نکته‌ی تراکنش: فراخواننده باید این را داخلِ transaction.atomic() صدا
+    بزند تا با set_password یا هر تغییرِ دیگری اتمیک بماند (الگویِ «یا
+    همه، یا هیچ» — هر دو مسیرِ ابطال با هم اعمال می‌شوند).
+
+    نکته‌ی idempotence: دوباره‌صدا‌کردنش بی‌خطر است — update_or_create فقط
+    لحظه را تازه می‌کند و get_or_create فقط رد می‌شود (بعضی توکن‌ها ممکن
+    است از قبل باطل باشند، مثلاً با logout یا چرخش).
+    """
+    UserSecurityProfile.objects.update_or_create(
+        user=user,
+        defaults={'password_changed_at': timezone.now()},
+    )
+    for outstanding in OutstandingToken.objects.filter(user=user):
+        BlacklistedToken.objects.get_or_create(token=outstanding)
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def change_password(request):
@@ -156,18 +194,12 @@ def change_password(request):
 
     # لایه‌ی ۳: اعمالِ اتمیک. set_password رمز را هش می‌کند (هرگز رمزِ خام
     # ذخیره نمی‌شود)؛ سپس همه‌ی توکن‌هایِ Refreshِ برجسته باطل و لحظه‌ی تغییر
-    # ثبت می‌شود. ترتیب داخلِ transaction: یا همه، یا هیچ.
+    # ثبت می‌شود. ترتیب داخلِ transaction: یا همه، یا هیچ (از 2026-09-12
+    # بدنه‌ی مشترک در _invalidate_all_sessions زندگی می‌کند).
     with transaction.atomic():
         request.user.set_password(new_password)
         request.user.save(update_fields=['password'])
-        UserSecurityProfile.objects.update_or_create(
-            user=request.user,
-            defaults={'password_changed_at': timezone.now()},
-        )
-        for outstanding in OutstandingToken.objects.filter(user=request.user):
-            # get_or_create چون بعضی‌ها ممکن است از قبل باطل باشند (مثلاً با
-            # logout یا چرخش) — دوباره‌سیاه‌کردن خطا نمی‌دهد، فقط رد می‌شود.
-            BlacklistedToken.objects.get_or_create(token=outstanding)
+        _invalidate_all_sessions(request.user)
 
     # جفتِ توکنِ تازه «بعد ازِ» سیاه‌کردنِ قدیمی‌ها صادر می‌شود تا خودش
     # در لیستِ سیاه نیفتد؛ iat آن >= لحظه‌ی تغییر است (مرزِ همان‌ثانیه در
@@ -177,6 +209,173 @@ def change_password(request):
         'detail': _('رمز عبور با موفقیت تغییر کرد؛ همه‌ی نشست‌هایِ دیگر باطل شدند.'),
         'refresh': str(refresh),
         'access': str(refresh.access_token),
+    })
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+# همان محدودیتِ نرخِ register/login (scopeِ 'auth'، به‌ازایِ IP): این مسیر
+# بدونِ لاگین صدا زده می‌شود و بدونِ سقف، می‌توان با آن صدها ایمیل (یا
+# صدها پروبِ «آیا این نامِ کاربری وجود دارد؟») تولید کرد.
+@throttle_classes([AuthBurstThrottle])
+def password_reset_request(request):
+    """درخواستِ لینکِ بازیابیِ رمز (از 2026-09-12) — POST /api/auth/password/reset/
+
+    ورودی: {"identifier": "نام کاربری یا ایمیل"} (یکی کافی است؛ backend هر
+    دو را امتحان می‌کند). خروجی: ۲۰۰ با پیامِ عمومی — همیشه.
+
+    اصلِ ضدِ کشفِ حساب (anti-enumeration): پاسخِ «حسابِ موجود» و «حسابِ
+    ناموجود» بایت‌به‌بایت یکسان است؛ نه status فرق دارد نه بدنه. کسی که
+    می‌خواهد فهرستِ نام‌هایِ کاربریِ ثبت‌شده را دربیاورد، از اینجا هیچ
+    اطلاعاتی نمی‌گیرد (این پاسخِ یکسان، «قراردادِ» این endpoint است —
+    نکته‌ی ۶.۱۸ AI_CONTEXT؛ تغییرش یعنی بازکردنِ کانالِ نشت).
+
+    سه حالتِ «بی‌ایمیل» (حسابِ ناموجود / حسابِ بدونِ ایمیلِ ثبت‌شده / حسابِ
+    غیرفعال) هیچ فرقی در پاسخ ندارند و فقط ایمیل فرستاده نمی‌شود. اگر
+    حسابِ موجود و ایمیل‌دار باشد، لینکِ یک‌بارمصرف به آن آدرس می‌رود.
+
+    موتورِ ایمیل: EMAIL_BACKEND — در توسعه console (لینک در stdoutِ
+    runserver) و در Production SMTP (05_deployment.md). خطایِ ارسالِ SMTP
+    عمداً «ثبت و بلعیده» می‌شود (logger.exception) تا شکستِ سرویسِ ایمیل
+    همان کانالِ نشت را باز نکند (۵۰۰ برایِ موجود و ۲۰۰ برایِ ناموجود =
+    oracle) — ادمین آن را در لاگ می‌بیند.
+    """
+    identifier = (request.data.get('identifier') or '').strip()
+    if not identifier:
+        return Response(
+            {'detail': _('نام کاربری یا ایمیل را وارد کنید.')},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # __iexact برایِ هر دو: ایمیل در ثبت‌نام اختیاری است و کاربر ممکن است
+    # با هر کدام باشد. مرزیِ شناخته‌شده: دو حسابِ «A@x» و «a@x» (که فقط در
+    # حروفِ بزرگ/کوچکِ ایمیل فرق دارند) از ثبت‌نامِ امروزِ پروژه می‌گذرند
+    # (یکتاییِ ستونِ email حساسِبه‌حروف است) — .first() یکی را برمی‌دارد؛
+    # ایده‌آل: نرمال‌سازیِ ایمیل هنگامِ ثبت‌نام (وظیفه‌ی آینده، نه این Task).
+    user = User.objects.filter(
+        Q(email__iexact=identifier) | Q(username__iexact=identifier),
+        is_active=True,
+    ).first()
+
+    # فقط برایِ حسابِ موجودِ ایمیل‌دار ایمیل می‌رود — بقیه‌ی حالت‌ها به همین
+    # جمله‌ی عمومیِ پایین می‌رسند و فرقشان فقط «ایمیل نرفتن» است.
+    if user is not None and user.email:
+        uid = urlsafe_base64_encode(str(user.pk).encode())
+        token = default_token_generator.make_token(user)
+        link = (
+            f'{settings.FRONTEND_BASE_URL}/static/reset-password.html'
+            f'?uid={uid}&token={token}'
+        )
+        # عمرِ لینک به دقیقه (برایِ جمله‌ی صادقانه‌ی داخلِ ایمیل) — از همان
+        # تنظیمِ واحدِِ رفتارِ سرور (PASSWORD_RESET_TIMEOUT) خوانده می‌شود.
+        minutes = max(1, settings.PASSWORD_RESET_TIMEOUT // 60)
+        subject = _('بازیابیِ رمزِ عبور — برنامه‌ریزِ هوشمندِ مطالعه')
+        # gettext پیام را ترجمه می‌کند و % مقادیر را داخلش می‌گذارد (الگویِ
+        # استانداردِ جنگو برایِ placeholderهایِ نامی — ترتیب در msgstr آزاد است).
+        body = _(
+            'سلام %(username)s،\n\n'
+            'برایِ تعیینِ رمزِ عبورِ جدید، این لینک را در مرورگر باز کنید:\n\n'
+            '%(link)s\n\n'
+            'این لینک %(minutes)s دقیقه اعتبار دارد و فقط یک‌بار قابلِ استفاده است. '
+            'اگر شما این درخواست را نداده‌اید، این ایمیل را نادیده بگیرید؛ '
+            'رمزِ عبورِ شما تغییری نمی‌کند.'
+        ) % {
+            'username': user.get_username(),
+            'link': link,
+            'minutes': minutes,
+        }
+        try:
+            send_mail(subject, body, settings.DEFAULT_FROM_EMAIL, [user.email])
+        except Exception:  # noqa: BLE001 — نیتِ صریح: پنهان‌سازی از پاسخِ HTTP
+            # شکستِ SMTP نباید به کاربرِ بی‌اطلاع ۵۰۰ بدهد (کانالِ نشتِ
+            # موجود/ناموجود)؛ در لاگِ سرور با سطحِ ERROR باقی می‌ماند.
+            import logging
+            logging.getLogger(__name__).exception(
+                'password reset email delivery failed for user pk=%s', user.pk
+            )
+
+    # پاسخِ واحدِ همه‌ی حالت‌ها — همین متن، همین status، همین کلیدها.
+    return Response({
+        'detail': _(
+            'اگر این حساب وجود داشته باشد، لینکِ بازیابی به ایمیلِ شما ارسال شد.'
+        ),
+    })
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def password_reset_confirm(request):
+    """تعیینِ رمزِ جدید با لینکِ بازیابی (از 2026-09-12) — POST /api/auth/password/reset/confirm/
+
+    ورودی: {"uid": "...", "token": "...", "new_password": "..."} — uid و token
+    همان چیزی است که در لینکِ ایمیل آمده. خروجیِ موفق: ۲۰۰ + پیامِ ترجمه‌شده؛
+    خروجیِ ناموفق: ۴۰۰ با پیامِ واحدِ «نامعتبر یا منقضی».
+
+    چرا توکنِ «امضاشده‌ی» جنگو و نه جدولِ رمزِ یک‌بارمصرف در دیتابیس؟
+    PasswordResetTokenGenerator همان الگویِ «امضا با SECRET_KEY + هشِ وضعیتِ
+    کاربر» است: بدونِ ذخیره‌ی چیزی در دیتابیس، یک‌بارمصرف است (بعد از تغییرِ
+    رمز، هشِ کاربر عوض می‌شود و توکن مرد)، زمان‌دار است (PASSWORD_RESET_TIMEOUT)
+    و جعلش بدونِ SECRET_KEY ممکن نیست. یعنی بدونِ مایگریشنِ جدید.
+
+    نکته‌ی امنیتیِ مهم: بعد از موفقیت، عمداً هیچ توکنی صادر نمی‌شود — بازیابیِ
+    رمز یعنی «ورودِ تازه‌ی ثابت‌شده با ایمیل» لازم است، نه ورودِ خودکار. رمزِ
+    جدید + همه‌ی نشست‌هایِ قبلی هم همان‌ لحظه باطل می‌شوند (_invalidate_all_sessions)
+    تا اگر رمزِ قبلی لو رفته بوده و برای همین بازیابی شده، مهاجمِ توکن‌دار
+    بیرون بیفتد (همان تضمینِ تغییرِ رمز از 2026-09-10).
+
+    محدودسازیِ نرخ: throttle پیش‌فرضِ سراسری (scopeِ anon به‌ازایِ IP)؛
+    کلاسِ auth اینجا عمداً نیست چون توکنِ امضاشده خودش «رازِ» این مسیر است و
+    حدسِش عملاً ممکن نیست — سقفِ anon برایِ جلوگیری از فشارِ خودکار کافی است.
+    """
+    uid = request.data.get('uid') or ''
+    token = request.data.get('token') or ''
+    new_password = request.data.get('new_password') or ''
+
+    if not uid or not token or not new_password:
+        return Response(
+            {'detail': _('هر سه فیلد uid، token و new_password لازمند.')},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # برگرداندنِ uid به کاربر: base64 امن برایِ URL است (کاراکترهایِ +/ به -_
+    # تبدیل می‌شوند). هر خطایِ دیکد/جست‌وجو = همان پیامِ واحدِ «نامعتبر» (بدونِ
+    # افشایِ این‌که کاربر وجود داشت یا نه).
+    try:
+        user = User.objects.get(pk=urlsafe_base64_decode(uid).decode(), is_active=True)
+    except (TypeError, ValueError, UnicodeDecodeError, OverflowError, User.DoesNotExist):
+        return Response(
+            {'detail': _('لینکِ بازیابی نامعتبر یا منقضی شده است.')},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not default_token_generator.check_token(user, token):
+        return Response(
+            {'detail': _('لینکِ بازیابی نامعتبر یا منقضی شده است.')},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # سیاستِ رمزِ جدید — همان اعتبارسنج‌هایِ ثبت‌نام/تغییرِ رمز (پیام‌هایِ
+    # خودِ جنگو، ترجمه‌ی fa/en خودکار). user واقعی لازم است چون
+    # UserAttributeSimilarity نامِ کاربری را هم می‌سنجد.
+    try:
+        validate_password(new_password, user)
+    except DjangoValidationError as error:
+        return Response(
+            {'new_password': list(error.messages)},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # اعمالِ اتمیک — و آن‌قدر مهم که دوباره گفته شود: set_password هش
+    # می‌کند (رمزِ خام هرگز ذخیره نمی‌شود) و _invalidate_all_sessions همه‌ی
+    # نشست‌هایِ قدیمی (Refresh + دسترسی) را می‌کشد. توکنِ بازیابی هم با
+    # همین تغییر مرد (هشِ رمز در توکن است) — یعنی یک‌بارمصرف.
+    with transaction.atomic():
+        user.set_password(new_password)
+        user.save(update_fields=['password'])
+        _invalidate_all_sessions(user)
+
+    return Response({
+        'detail': _('رمز عبور با موفقیت بازنشانی شد؛ لطفاً با رمزِ جدید وارد شوید.'),
     })
 
 

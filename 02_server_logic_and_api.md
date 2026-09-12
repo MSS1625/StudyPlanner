@@ -131,7 +131,7 @@ router.register(r'study-plan', views.StudyPlanViewSet, basename='study-plan')
 router.register(r'study-logs', views.StudyLogViewSet, basename='studylog')
 ```
 
-سپس هشت مسیرِ باقیمانده دستی اضافه می‌شوند: `auth/register/`, `auth/login/`, `auth/refresh/`, `auth/logout/`, `auth/password/` (از 2026-09-10 — تغییرِ رمزِ عبور؛ فقط با احرازِ هویت + رمزِ فعلی), `dashboard/`, `predictions/` (از 2026-09-09 — مؤلفه‌ی یادگیریِ آماری؛ فقط با احرازِ هویت) و `health/` (از 2026-09-10 — پایشِ سلامت؛ عمومی و معاف از throttle). سه‌تایِ اول توابعِ ساده‌ی همین فایل‌اند؛ `auth/refresh/` اما ویویِ آماده‌ی `TokenRefreshView` از SimpleJWT است (بدنه‌ی `{"refresh": "..."}` می‌گیرد و توکنِ دسترسیِ تازه برمی‌گرداند — با چرخشِ فعال، توکنِ Refreshِ تازه هم؛ قبلی بلافاصله باطل می‌شود) و `auth/logout/` ویویِ آماده‌ی `TokenBlacklistView` است (از 2026-09-08؛ توکنِ Refreshِ داده‌شده را در لیستِ سیاه ابطال می‌کند)؛ هر دو مثلِ register/login بدونِ هدرِ Authorization در دسترس‌اند.
+سپس ده مسیرِ باقیمانده دستی اضافه می‌شوند: `auth/register/`, `auth/login/`, `auth/refresh/`, `auth/logout/`, `auth/password/` (از 2026-09-10 — تغییرِ رمزِ عبور؛ فقط با احرازِ هویت + رمزِ فعلی), `auth/password/reset/` و `auth/password/reset/confirm/` (از 2026-09-12 — بازیابیِ رمزِ فراموش‌شده؛ هر دو بی‌لاگین، اولی با AuthBurstThrottle و پاسخِ عمومیِ ضدِ کشفِ حساب، دومی با uid/tokenِ امضاشده‌ی ایمیل — بخشِ ۲.۱۰), `dashboard/`, `predictions/` (از 2026-09-09 — مؤلفه‌ی یادگیریِ آماری؛ فقط با احرازِ هویت) و `health/` (از 2026-09-10 — پایشِ سلامت؛ عمومی و معاف از throttle). سه‌تایِ اول توابعِ ساده‌ی همین فایل‌اند؛ `auth/refresh/` اما ویویِ آماده‌ی `TokenRefreshView` از SimpleJWT است (بدنه‌ی `{"refresh": "..."}` می‌گیرد و توکنِ دسترسیِ تازه برمی‌گرداند — با چرخشِ فعال، توکنِ Refreshِ تازه هم؛ قبلی بلافاصله باطل می‌شود) و `auth/logout/` ویویِ آماده‌ی `TokenBlacklistView` است (از 2026-09-08؛ توکنِ Refreshِ داده‌شده را در لیستِ سیاه ابطال می‌کند)؛ هر دو مثلِ register/login بدونِ هدرِ Authorization در دسترس‌اند.
 
 **نکته‌ی فنیِ مهم که در کامنت‌های خودِ فایل هم آمده:** ترتیب اجرا حیاتی است — تمامِ فراخوانی‌های `router.register(...)` باید **پیش از** خطِ `path('', include(router.urls))` نوشته شوند. چون `router.urls` در همان لحظه‌ای که خوانده می‌شود، لیستِ نهاییِ URLها را از روی ViewSetهای *تا آن لحظه ثبت‌شده* می‌سازد؛ اگر چیزی بعد از آن ثبت شود، اصلاً به فهرستِ نهایی اضافه نمی‌شود.
 
@@ -201,7 +201,7 @@ $$
 
 ## ۲.۶ `backend/planner/tests.py` — مجموعه‌تستِ خودکار (از 2026-08-29)
 
-۲۱۴ تستِ Django/DRF روی `APITestCase` (به‌علاوهِ دو کلاسِ `TransactionTestCase` — قیدِ DB و حذفِ گزارشِ یتیم — + کلاسِ `JWTTokenRotationBlacklistTests` (چرخش/لیستِ سیاه/خروجِ سرور-محور) + کلاسِ `StudyLogConcurrencyLockTests` (قفلِ هم‌زمانی و خواندنِ تازه) + کلاسِ `SettingsEnvVarsTests` با `SimpleTestCase` برای متغیرهایِ محیطی + کلاس‌هایِ چندزبانی: `I18nAcceptLanguageTests` (۹) و `I18nCatalogIntegrityTests` (۶) + پنج کلاسِ آمادگیِ استقرار (سلامت/throttle/هدرهایِ امنیتی؛ از 2026-09-10)) که کلِ سطحِ API و الگوریتم را پوشش می‌دهند. کلاسِ پایه‌ی `BaseAPITestCase` دو کاربرِ نمونه (alice/bob) می‌سازد، متدِ `client_as(user)` کلاینتِ احراز‌هویت‌شده با **همان مسیرِ واقعیِ JWT** (توکنِ `SimpleJWT` در هدرِ `Authorization: Bearer`) برمی‌گرداند — یعنی لایه‌ی احراز هویت هم داخلِ تست‌هاست، نه دور زده‌شده با `force_authenticate` — و از 2026-09-10 `tearDown` آن کش را پاک می‌کند تا شمارنده‌هایِ throttle بینِ تست‌ها نشت نکنند.
+۲۴۶ تستِ Django/DRF روی `APITestCase` (به‌علاوهِ دو کلاسِ `TransactionTestCase` — قیدِ DB و حذفِ گزارشِ یتیم — + کلاسِ `JWTTokenRotationBlacklistTests` (چرخش/لیستِ سیاه/خروجِ سرور-محور) + کلاسِ `StudyLogConcurrencyLockTests` (قفلِ هم‌زمانی و خواندنِ تازه) + کلاسِ `SettingsEnvVarsTests` با `SimpleTestCase` برای متغیرهایِ محیطی + کلاس‌هایِ چندزبانی: `I18nAcceptLanguageTests` (۹) و `I18nCatalogIntegrityTests` (۶) + پنج کلاسِ آمادگیِ استقرار (سلامت/throttle/هدرهایِ امنیتی؛ از 2026-09-10) + چهار کلاسِ امنیتِ حساب (سیاستِ رمز/تغییرِ رمز/ابطال/پروفایل؛ از 2026-09-10) + پنج کلاسِ بازیابیِ رمز (درخواست/نرخ/تأیید/ابطالِ نشست/تنظیمات؛ از 2026-09-12)) که کلِ سطحِ API و الگوریتم را پوشش می‌دهند. کلاسِ پایه‌ی `BaseAPITestCase` دو کاربرِ نمونه (alice/bob) می‌سازد، متدِ `client_as(user)` کلاینتِ احراز‌هویت‌شده با **همان مسیرِ واقعیِ JWT** (توکنِ `SimpleJWT` در هدرِ `Authorization: Bearer`) برمی‌گرداند — یعنی لایه‌ی احراز هویت هم داخلِ تست‌هاست، نه دور زده‌شده با `force_authenticate` — و از 2026-09-10 `tearDown` آن کش را پاک می‌کند تا شمارنده‌هایِ throttle بینِ تست‌ها نشت نکنند.
 
 | کلاس | تعداد | پوشش |
 |---|---|---|
@@ -273,3 +273,25 @@ $$
 - **ویوی `change_password`** (`POST /api/auth/password/`؛ `IsAuthenticated` + throttleِ پیش‌فرضِ scopeِ 'user'): بدنه‌ی `{"current_password", "new_password"}`؛ لایه‌ها: چکِ رمزِ فعلی (`check_password` — ۴۰۰ ترجمه‌شده) → `validate_password` روی رمزِ جدید با کاربرِ واقعی (۴۰۰ با پیام‌هایِ سیاستِ جنگو) → اعمالِ اتمیک در `transaction.atomic`: `set_password` + سیاه‌کردنِ همه‌ی `OutstandingToken`هایِ کاربر (نه فقط توکنِ همین نشست!) + `update_or_create` پروفایل → صدورِ جفتِ توکنِ تازه در پاسخ تا نشستِ همین دستگاه ادامه یابد. نتیجه: تغییرِ رمز، «همه‌ی» دستگاه‌هایِ دیگر و توکن‌هایِ دزدیده‌شده‌یِ قبل ازِ تغییر را در همان لحظه از کار می‌اندازد.
 
 سیاستِ رمز در «ثبت‌نام» هم (از همین تاریخ) در `UserSerializer.validate` اجرا می‌شود — با یک نمونه‌یِ گذرایِ User برایِ سنجشِ شباهت به username/email (کاربر هنوز ذخیره نشده). پیام‌هایِ سیاست مالِ کاتالوگِ fa/en خودِ جنگوست؛ سه پیامِ اختصاصیِ این بخش (رمزِ فعلیِ غلط/جزئیاتِ موفقیت/پیامِ ۴۰۱ِ ابطال) در کاتالوگِ `locale/en` پروژه‌اند.
+
+
+## ۲.۱۰ بازیابیِ رمزِ فراموش‌شده — `password_reset_request` + `password_reset_confirm` (از 2026-09-12)
+
+دو ویوی بی‌لاگین که حلقه‌ی امنیتیِ حساب را کامل می‌کنند (کاربرِ بی‌رمز هم راهی به حسابش دارد):
+
+- **ویوی `password_reset_request`** (`POST /api/auth/password/reset/`؛ `AllowAny` + `AuthBurstThrottle`):
+  ورودیِ `{"identifier": ...}` (نامِ کاربری یا ایمیل — `__iexact` رویِ هر دو). خروجی همیشه ۲۰۰ با پیامِ
+  عمومی؛ **اصلِ ضدِ کشفِ حساب**: موجودِ ایمیل‌دار / ناموجود / بدونِ ایمیل / غیرفعال بایت‌به‌بایت یکسانند
+  (نکته‌ی ۶.۱۸ AI_CONTEXT). برایِ حسابِ موجودِ ایمیل‌دار، لینکِ `FRONTEND_BASE_URL/static/reset-password.html?uid=..&token=..`
+  با `send_mail` می‌رود؛ شکستِ SMTP ثبت و بلعیده می‌شود (`logger.exception`) تا ۵۰۰ برایِ موجود همان کانالِ
+  نشت را باز نکند.
+- **ویوی `password_reset_confirm`** (`POST /api/auth/password/reset/confirm/`؛ `AllowAny` + throttleِ پیش‌فرضِ
+  scopeِ anon): ورودیِ `{"uid", "token", "new_password"}`. uid = `urlsafe_base64_encode(pk)` و token =
+  `PasswordResetTokenGenerator` جنگو (امضا با SECRET_KEY + هشِ وضعیت — **بدونِ مایگریشن/جدول**؛
+  یک‌بارمصرف: بعد از `set_password` توکن می‌میرد؛ زمان‌دار: `PASSWORD_RESET_TIMEOUT` پیش‌فرضِ ۳۶۰۰).
+  رمزِ جدید از همان `AUTH_PASSWORD_VALIDATORS` می‌گذرد (user واقعی از DB برایِ سنجشِ شباهت). اعمالِ اتمیک:
+  `set_password` + `_invalidate_all_sessions` (همانِ تغییرِ رمز — همه‌ی Refreshها سیاه + مهرِ پروفایل).
+  **عمداً هیچ توکنی صادر نمی‌شود** — ورودِ تازه لازم است.
+- **`_invalidate_all_sessions(user)`**: تابعِ مشترکی که بدنه‌ی ابطال را از `change_password` استخراج کرد
+  (۲۰۲۶-۰۹-۱۲) — «یک» منبعِ حقیقت برایِ کشتنِ نشست‌ها؛ فراخوانی فقط داخلِ `transaction.atomic`.
+

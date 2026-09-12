@@ -3293,3 +3293,514 @@ class UserSecurityProfileModelTests(BaseAPITestCase):
         self.assertEqual(first.pk, second.pk)
         self.assertEqual(UserSecurityProfile.objects.count(), 1)
         self.assertEqual(second.password_changed_at, later)
+
+
+# ---------------------------------------------------------------------------
+# بازیابیِ رمزِ فراموش‌شده (از 2026-09-12)
+# ---------------------------------------------------------------------------
+# دو endpoint بی‌لاگین: POST /api/auth/password/reset/ (درخواستِ لینک) و
+# POST /api/auth/password/reset/confirm/ (تعیینِ رمزِ جدید با uid/token).
+# تست‌ها با backend ایمیلِ locmem اجرا می‌شوند (ایمیل‌ها به جایِ ارسال در
+# mail.outbox جمع می‌شوند) — «موتورِ» فرستادن جدا از «منطقِ» endpoint تست
+# می‌شود؛ خودِ موتورِ console/SMTP در PasswordResetSettingsTests.
+# ---------------------------------------------------------------------------
+
+import re as _re
+from datetime import datetime
+from django.contrib.auth.tokens import default_token_generator
+from django.core import mail
+from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
+
+# موتورِ ایمیلِ تست: locmem (بدونِ شبکه) — رفتارِ واقعیِ view مستقل از موتور
+_LOCMEM = {'EMAIL_BACKEND': 'django.core.mail.backends.locmem.EmailBackend'}
+
+_RESET_URL = '/api/auth/password/reset/'
+_RESET_CONFIRM_URL = '/api/auth/password/reset/confirm/'
+
+
+def _make_reset_link(user):
+    """uid + tokenِ همان لینکی که ایمیل می‌رود — برایِ تستِ مستقیمِ confirm."""
+    return (
+        urlsafe_base64_encode(str(user.pk).encode()),
+        default_token_generator.make_token(user),
+    )
+
+
+def _extract_link_from_email(message):
+    """لینکِ بازیابی را از متنِ ایمیل بیرون می‌کشد (فرمتِ دقیقِ ایمیلِ view)."""
+    match = _re.search(r'(https?://\S*reset-password\.html\?uid=[^&\s]+&token=\S+)', message.body)
+    return match.group(1) if match else None
+
+
+@override_settings(**_LOCMEM)
+class PasswordResetRequestAPITests(BaseAPITestCase):
+    """POST /api/auth/password/reset/ — «ایمیل برو» با اصلِ ضدِ کشفِ حساب.
+
+    قراردادِ امنیتیِ این endpoint (نکته‌ی ۶.۱۷ AI_CONTEXT): پاسخِ حسابِ
+    موجودِ ایمیل‌دار، حسابِ ناموجود، حسابِ بدونِ ایمیل و حسابِ غیرفعال
+    بایت‌به‌بایت یکسان است — تنها تفاوتِ دنیایِ واقعی، «ایمیلِ رفتن» است.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.alice.email = 'alice@example.com'
+        self.alice.save(update_fields=['email'])
+
+    def test_request_by_email_sends_one_email(self):
+        """شناسه = ایمیلِ آلیس → ۲۰۰ + دقیقاً یک ایمیل به همان آدرس."""
+        resp = self.client.post(_RESET_URL, {'identifier': 'alice@example.com'}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertIn('detail', resp.json())
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ['alice@example.com'])
+
+    def test_request_by_username_sends_email(self):
+        """شناسه = نامِ کاربری هم کار می‌کند (ایمیل در ثبت‌نام اختیاری است)."""
+        resp = self.client.post(_RESET_URL, {'identifier': 'alice'}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(mail.outbox), 1)
+
+    def test_request_is_case_insensitive_for_email(self):
+        """حروفِ بزرگ/کوچکِ ایمیل نباید مسیرِ بازیابی را ببندد."""
+        resp = self.client.post(_RESET_URL, {'identifier': 'Alice@Example.COM'}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(mail.outbox), 1)
+
+    def test_unknown_identifier_returns_identical_generic_response(self):
+        """اصلِ ضدِ کشفِ حساب: ناموجود و موجود، همان status و همان بدنه."""
+        resp_known = self.client.post(_RESET_URL, {'identifier': 'alice@example.com'}, format='json')
+        resp_unknown = self.client.post(_RESET_URL, {'identifier': 'nobody@example.com'}, format='json')
+        self.assertEqual(resp_known.status_code, resp_unknown.status_code)
+        self.assertEqual(resp_known.json(), resp_unknown.json())
+        # فقط فرقِ واقعی: برایِ ناموجود هیچ ایمیلی نمی‌رود
+        self.assertEqual(len(mail.outbox), 1)
+
+    def test_user_without_email_returns_generic_response_and_sends_nothing(self):
+        """باب (بدونِ ایمیلِ ثبت‌شده) → همان پاسخِ عمومی، بدونِ ایمیل."""
+        resp = self.client.post(_RESET_URL, {'identifier': 'bob'}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.json()['detail'],
+                         'اگر این حساب وجود داشته باشد، لینکِ بازیابی به ایمیلِ شما ارسال شد.')
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_inactive_user_gets_no_email(self):
+        """حسابِ غیرفعالْ لینکِ بازیابی نمی‌گیرد (ولی همان پاسخِ عمومی)."""
+        self.alice.is_active = False
+        self.alice.save(update_fields=['is_active'])
+        resp = self.client.post(_RESET_URL, {'identifier': 'alice@example.com'}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_missing_identifier_returns_400(self):
+        """بدونِ شناسه → ۴۰۰ با پیامِ ترجمه‌شده (این خطا فاش‌کننده نیست)."""
+        resp = self.client.post(_RESET_URL, {'identifier': '   '}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(resp.json()['detail'], 'نام کاربری یا ایمیل را وارد کنید.')
+
+    def test_email_contains_valid_recovery_link(self):
+        """ایمیلِ رفته: لینکِ کامل با uid/tokenِ واقعاً معتبر + مبدأِ پیش‌فرض."""
+        self.client.post(_RESET_URL, {'identifier': 'alice@example.com'}, format='json')
+        self.assertEqual(len(mail.outbox), 1)
+        link = _extract_link_from_email(mail.outbox[0])
+        self.assertIsNotNone(link, 'email body must contain the recovery link')
+        self.assertIn('/static/reset-password.html?uid=', link)
+        # uid باید به همان کاربر برگردد و token باید از سنجشِ مولد رد شود:
+        query = link.split('?', 1)[1]
+        params = dict(pair.split('=', 1) for pair in query.split('&'))
+        user_pk = urlsafe_base64_decode(params['uid']).decode()
+        user = User.objects.get(pk=user_pk)
+        self.assertEqual(user, self.alice)
+        self.assertTrue(default_token_generator.check_token(user, params['token']))
+
+    def test_email_link_respects_frontend_base_url_override(self):
+        """مبدأِ لینک از FRONTEND_BASE_URL می‌آید (تنظیمِ سرور، نه حدس)."""
+        with override_settings(FRONTEND_BASE_URL='https://planner.example.com'):
+            self.client.post(_RESET_URL, {'identifier': 'alice@example.com'}, format='json')
+        link = _extract_link_from_email(mail.outbox[0])
+        self.assertTrue(link.startswith('https://planner.example.com/static/reset-password.html'))
+
+    def test_english_response_and_email_when_accept_language_en(self):
+        """زبانِ درخواست، هم پاسخِ HTTP و هم ایمیلِ رفته را ترجمه می‌کند."""
+        resp = self.client.post(_RESET_URL, {'identifier': 'alice@example.com'},
+                                format='json', HTTP_ACCEPT_LANGUAGE='en')
+        self.assertEqual(resp.json()['detail'],
+                         'If this account exists, a recovery link has been sent to your email.')
+        self.assertEqual(mail.outbox[0].subject,
+                         'Password recovery — Smart Study Planner')
+        self.assertIn('Hello alice,', mail.outbox[0].body)
+        self.assertIn('valid for 60 minutes', mail.outbox[0].body)
+
+    def test_get_method_not_allowed(self):
+        """این endpoint فقط POST است (GET → 405، مکانیکِ @api_view)."""
+        resp = self.client.get(_RESET_URL)
+        self.assertEqual(resp.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+
+    def test_email_delivery_failure_still_returns_generic_200(self):
+        """شکستِ SMTP نباید ۵۰۰ بدهد — وگرنه فرقِ موجود/ناموجود لو می‌رود."""
+        with patch('planner.views.send_mail', side_effect=ConnectionError('SMTP down')):
+            resp = self.client.post(_RESET_URL, {'identifier': 'alice@example.com'}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.json()['detail'],
+                         'اگر این حساب وجود داشته باشد، لینکِ بازیابی به ایمیلِ شما ارسال شد.')
+
+
+@patch.object(SimpleRateThrottle, 'THROTTLE_RATES', _THROTTLE_TEST_RATES)
+class PasswordResetThrottleTests(BaseAPITestCase):
+    """نرخِ درخواستِ بازیابی — همان مکانیکِ ThrottlingAPITests (نرخ‌هایِ
+    کوچک‌شده روی کلاس patch می‌شوند چون DRF نرخ‌ها را زمانِ import
+    snapshot می‌گیرد؛ نگاشتِ env→نرخ جداگانه اثبات شده)."""
+
+    def setUp(self):
+        super().setUp()
+        self.alice.email = 'alice@example.com'
+        self.alice.save(update_fields=['email'])
+
+    def test_reset_request_burst_gets_throttled(self):
+        """بورستِ درخواستِ لینک از یک IP → سومی ۴۲۹ + Retry-After (scope auth)."""
+        for _ in range(2):
+            resp = self.client.post(_RESET_URL, {'identifier': 'alice@example.com'}, format='json')
+            self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        resp = self.client.post(_RESET_URL, {'identifier': 'alice@example.com'}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+        self.assertTrue(str(resp['Retry-After']).isdigit())
+
+    def test_confirm_endpoint_is_anon_scoped_not_auth_scoped(self):
+        """confirm از scopeِ auth نیست (رازش توکن است) ولی anon سقفش را
+        می‌گذارد — سه درخواستِ ردشدهِ پشتِ‌سرِهم، سومی ۴۲۹. توکنِ عمداً
+        دستکاری‌شده است تا هر سه درخواستِ «رد» معنادار بمانند (۴۰۰) و سقفِ
+        نرخ روی همان مسیر آزموده شود (نخستینِ معتبر ۲۰۰ می‌شد و token را
+        مصرف می‌کرد — رشته‌ی ردشدهِِ تکرارپذیرِ پایدارتر است)."""
+        uid, _ = _make_reset_link(self.alice)
+        payload = {'uid': uid, 'token': 'tampered-token-value', 'new_password': 'pw-12345678'}
+        for _ in range(2):
+            resp = self.client.post(_RESET_CONFIRM_URL, payload, format='json')
+            self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        resp = self.client.post(_RESET_CONFIRM_URL, payload, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
+
+class PasswordResetConfirmAPITests(BaseAPITestCase):
+    """POST /api/auth/password/reset/confirm/ — تعیینِ رمزِ جدید با لینک.
+
+    ماتریسِ رد: فیلدِ غایب / uidِ خراب / tokenِ خراب / tokenِ کاربرِ دیگر /
+    tokenِ مصرف‌شده / tokenِ منقضی / حسابِ غیرفعال — همه ۴۰۰ با پیامِ واحدِ
+    «نامعتبر یا منقضی» (بدونِ افشایِ اینکه کدام). ماتریسِ پذیرش: رمزِ قوی +
+    لینکِ تازه = ۲۰۰ و بدونِ صدورِ توکن (ورودِ تازه لازم است).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.carol = User.objects.create_user(
+            username='carol', email='carol@example.com', password='pw-old-pass-123',
+        )
+
+    def _confirm(self, uid, token, new_password='pw-brand-new-456', **client_kwargs):
+        """POST confirm — kwargsهای اضافی به‌عنوانِ هدرِ درخواست (مثل
+        HTTP_ACCEPT_LANGUAGE) به client.post می‌روند، نه داخلِ بدنه."""
+        return self.client.post(
+            _RESET_CONFIRM_URL,
+            {'uid': uid, 'token': token, 'new_password': new_password},
+            format='json',
+            **client_kwargs,
+        )
+
+    def test_happy_path_resets_password_and_requires_fresh_login(self):
+        """مسیرِ کاملِ موفق: ۲۰۰ + رمزِ قدیمی مرد + رمزِ جدید زنده است."""
+        uid, token = _make_reset_link(self.carol)
+        resp = self._confirm(uid, token)
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.json()['detail'],
+                         'رمز عبور با موفقیت بازنشانی شد؛ لطفاً با رمزِ جدید وارد شوید.')
+        # ورودِ تازه با رمزِ قدیمی → 401؛ با رمزِ جدید → 200:
+        old_login = self.client.post('/api/auth/login/',
+                                     {'username': 'carol', 'password': 'pw-old-pass-123'},
+                                     format='json')
+        self.assertEqual(old_login.status_code, status.HTTP_401_UNAUTHORIZED)
+        new_login = self.client.post('/api/auth/login/',
+                                     {'username': 'carol', 'password': 'pw-brand-new-456'},
+                                     format='json')
+        self.assertEqual(new_login.status_code, status.HTTP_200_OK)
+
+    def test_success_response_issues_no_tokens(self):
+        """بازیابیِ موفق عمداً توکن صادر نمی‌کند — ورودِ تازه لازم است (شواهد
+        مالکیتِ ایمیل به نشستِ خودکار تبدیل نشود)."""
+        uid, token = _make_reset_link(self.carol)
+        resp = self._confirm(uid, token)
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        body = resp.json()
+        self.assertNotIn('access', body)
+        self.assertNotIn('refresh', body)
+
+    def test_weak_password_rejected_with_policy_messages(self):
+        """رمزِ جدید از همان سیاستِ ثبت‌نام می‌گذرد — پیام‌هایِ جنگو (fa)."""
+        uid, token = _make_reset_link(self.carol)
+        resp = self._confirm(uid, token, new_password='12345678')
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        messages = resp.json()['new_password']
+        self.assertTrue(any('رایج' in message for message in messages),
+                        msg=messages)
+
+    def test_password_similar_to_username_rejected(self):
+        """UserAttributeSimilarity: رمزِ شبیهِ نامِ کاربری رد می‌شود."""
+        similar_user = User.objects.create_user(
+            username='roberta', email='roberta@example.com', password='pw-old-pass-123',
+        )
+        uid, token = _make_reset_link(similar_user)
+        resp = self._confirm(uid, token, new_password='roberta1234')
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('new_password', resp.json())
+
+    def test_missing_fields_returns_400(self):
+        """هر سه فیلد لازم‌اند؛ غیبتِ هرکدام → ۴۰۰ با پیامِ راهنما."""
+        uid, token = _make_reset_link(self.carol)
+        resp = self.client.post(_RESET_CONFIRM_URL, {'uid': uid, 'token': token},
+                                format='json')
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(resp.json()['detail'],
+                         'هر سه فیلد uid، token و new_password لازمند.')
+
+    def test_invalid_uid_returns_400(self):
+        """uidِ دست‌کاری‌شده → همان ۴۰۰ واحد (کاربر وجود داشت یا نه، فرقی
+        در پاسخ نیست)."""
+        resp = self._confirm('not-a-valid-uid', 'whatever-token')
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(resp.json()['detail'], 'لینکِ بازیابی نامعتبر یا منقضی شده است.')
+
+    def test_invalid_token_returns_400(self):
+        uid, _ = _make_reset_link(self.carol)
+        resp = self._confirm(uid, 'tampered-token-value')
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(resp.json()['detail'], 'لینکِ بازیابی نامعتبر یا منقضی شده است.')
+
+    def test_token_of_other_user_rejected(self):
+        """tokenِ آلیس + uidِ کارول = جعلِ ساده؛ مولد ردش می‌کند (امضا به
+        وضعیتِ کاربر وصل است، نه فقط به SECRET_KEY)."""
+        uid, _ = _make_reset_link(self.carol)
+        _, alice_token = _make_reset_link(self.alice)
+        resp = self._confirm(uid, alice_token)
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_token_is_single_use(self):
+        """بارِ اول موفق، بارِ دوم با همان token → ۴۰۰ و رمز همانِ اول
+        می‌ماند (هشِ رمز در توکن است؛ تغییرش توکن را می‌کشد)."""
+        uid, token = _make_reset_link(self.carol)
+        first = self._confirm(uid, token, new_password='pw-first-reset-1')
+        self.assertEqual(first.status_code, status.HTTP_200_OK)
+        second = self._confirm(uid, token, new_password='pw-second-reset-2')
+        self.assertEqual(second.status_code, status.HTTP_400_BAD_REQUEST)
+        # رمزِ نهایی همانِ اول است، نه دومی:
+        second_login = self.client.post('/api/auth/login/',
+                                        {'username': 'carol', 'password': 'pw-second-reset-2'},
+                                        format='json')
+        self.assertEqual(second_login.status_code, status.HTTP_401_UNAUTHORIZED)
+        first_login = self.client.post('/api/auth/login/',
+                                       {'username': 'carol', 'password': 'pw-first-reset-1'},
+                                       format='json')
+        self.assertEqual(first_login.status_code, status.HTTP_200_OK)
+
+    def test_expired_token_rejected(self):
+        """tokenِ درست ولی «از آینده» سنجیده می‌شود (PASSWORD_RESET_TIMEOUT
+        گذشته) → همان ۴۰۰ِ واحد. _now مولدِ جنگو mock می‌شود (تستِ قطعی،
+        بدونِ sleep)."""
+        uid, token = _make_reset_link(self.carol)
+        future = datetime.now() + timedelta(
+            seconds=django_settings.PASSWORD_RESET_TIMEOUT + 5,
+        )
+        with patch.object(default_token_generator, '_now', return_value=future):
+            resp = self._confirm(uid, token)
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(resp.json()['detail'], 'لینکِ بازیابی نامعتبر یا منقضی شده است.')
+
+    def test_english_error_messages(self):
+        """پیام‌هایِ confirm با Accept-Language: en انگلیسی می‌شوند."""
+        uid, _ = _make_reset_link(self.carol)
+        resp = self._confirm(uid, 'bad-token', HTTP_ACCEPT_LANGUAGE='en')
+        self.assertEqual(resp.json()['detail'],
+                         'The recovery link is invalid or has expired.')
+
+    def test_inactive_user_cannot_use_link(self):
+        """حسابِ غیرفعالْ حتی با لینکِ معتبر هم بازیابی نمی‌کند (۴۰۰ واحد)."""
+        uid, token = _make_reset_link(self.carol)
+        self.carol.is_active = False
+        self.carol.save(update_fields=['is_active'])
+        resp = self._confirm(uid, token)
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+@override_settings(**_LOCMEM)
+class PasswordResetSessionInvalidationTests(BaseAPITestCase):
+    """بازیابیِ موفق = همان تضمینِ تغییرِ رمز (2026-09-10): همه‌ی نشست‌هایِ
+    قبلی — Refresh (لیستِ سیاه) و حتی Access زنده (password_changed_at) —
+    همان لحظه می‌میرند. مسیرِ کاملِ API: درخواستِ لینک → بازکردنِ ایمیل →
+    confirm (بدونِ دستکاریِ مستقیمِ مدل)."""
+
+    def setUp(self):
+        super().setUp()
+        self.carol = User.objects.create_user(
+            username='carol', email='carol@example.com', password='pw-old-pass-123',
+        )
+
+    def test_all_old_tokens_die_after_reset(self):
+        """ورودِ قبلِ بازیابی (توکن‌هایِ زنده) → بعدِ confirm همه ۴۰۱."""
+        # نشستِ قبل از بازیابی (یک login واقعی تا OutstandingToken ساخته شود):
+        login = self.client.post('/api/auth/login/',
+                                 {'username': 'carol', 'password': 'pw-old-pass-123'},
+                                 format='json')
+        self.assertEqual(login.status_code, status.HTTP_200_OK)
+        old_access = login.json()['access']
+        old_refresh = login.json()['refresh']
+
+        # جریانِ بازیابی از خودِ API (درخواست → لینک از ایمیل → تعیینِ رمز):
+        self.client.post(_RESET_URL, {'identifier': 'carol@example.com'}, format='json')
+        self.assertEqual(len(mail.outbox), 1)
+        link = _extract_link_from_email(mail.outbox[0])
+        query = dict(pair.split('=', 1) for pair in link.split('?', 1)[1].split('&'))
+        resp = self.client.post(
+            _RESET_CONFIRM_URL,
+            {'uid': query['uid'], 'token': query['token'], 'new_password': 'pw-brand-new-456'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+
+        # کلِ تست در «همانِ ثانیه» اجرا می‌شود و مرزِ مستندشده (پنجره‌ی
+        # یک‌ثانیه‌ایِ docstringِ authentication.py) توکنِ صادرشده در همان
+        # ثانیه را زنده نگه می‌دارد. در دنیای واقعی نشستِ قبلِ بازیابی همیشه
+        # بیش از یک ثانیه عمر دارد؛ همین فاصله را با مهرِ زمان شبیه‌سازی
+        # می‌کنیم — همانِ الگویِ StaleAccessTokenInvalidationTests و بدونِ
+        # sleep؛ سازوکار (iat در برابرِ password_changed_at) آنجا مستقیم
+        # تست شده و اینجا «عملی‌بودنِ سیم‌کشی» (confirm →
+        # _invalidate_all_sessions → پروفایل) اثبات می‌شود:
+        profile = UserSecurityProfile.objects.get(user=self.carol)
+        profile.password_changed_at = timezone.now() + timedelta(seconds=2)
+        profile.save(update_fields=['password_changed_at'])
+
+        # توکنِ دسترسیِ قبلِ بازیابی → 401 با کدِ password_changed:
+        api = APIClient()
+        api.credentials(HTTP_AUTHORIZATION=f'Bearer {old_access}')
+        resp = api.get('/api/subjects/')
+        self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+        # توکنِ Refreshِ قبلِ بازیابی → 401 (لیستِ سیاه):
+        resp = self.client.post('/api/auth/refresh/', {'refresh': old_refresh}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+
+        # و مهرِ زمانِ تغییر هم ثبت شده (معیارِ لایه‌ی authentication) — همان
+        # پروفایلی که بالا برای شبیه‌سازیِ فاصله جابه‌جا شد، خودِ confirm ساخته:
+        self.assertIsNotNone(profile.password_changed_at)
+
+    def test_other_users_sessions_unaffected(self):
+        """بازیابیِ کارول به نشستِ باب نمی‌زند — جداسازیِ کاربر-به-کاربر."""
+        bob_client = self.client_as(self.bob)
+        self.assertEqual(bob_client.get('/api/subjects/').status_code, status.HTTP_200_OK)
+
+        uid, token = _make_reset_link(self.carol)
+        self.client.post(
+            _RESET_CONFIRM_URL,
+            {'uid': uid, 'token': token, 'new_password': 'pw-brand-new-456'},
+            format='json',
+        )
+
+        self.assertEqual(bob_client.get('/api/subjects/').status_code, status.HTTP_200_OK)
+        self.assertFalse(UserSecurityProfile.objects.filter(user=self.bob).exists())
+
+
+class PasswordResetSettingsTests(SimpleTestCase):
+    """متغیرهایِ محیطیِ ایمیل/بازیابی — هم‌الگویِ ThrottleAndSecuritySettingsTests:
+    مقادیرِ پیش‌فرضِ dev-safe + «بوتِ واقعیِ» Production با مفسرِ جدا."""
+
+    _ENV_KEYS = (
+        'DJANGO_SECRET_KEY', 'DJANGO_DEBUG', 'DJANGO_ALLOWED_HOSTS',
+        'DJANGO_CORS_ALLOW_ALL', 'DJANGO_ALLOWED_ORIGINS', 'DATABASE_URL',
+        'DJANGO_ANON_THROTTLE_RATE', 'DJANGO_USER_THROTTLE_RATE',
+        'DJANGO_AUTH_THROTTLE_RATE', 'DJANGO_SECURE_SSL_REDIRECT',
+        'DJANGO_COOKIES_SECURE', 'DJANGO_HSTS_SECONDS',
+        'DJANGO_PROXY_SSL_HEADER', 'DJANGO_EMAIL_BACKEND',
+        'DJANGO_EMAIL_HOST', 'DJANGO_EMAIL_PORT', 'DJANGO_EMAIL_HOST_USER',
+        'DJANGO_EMAIL_HOST_PASSWORD', 'DJANGO_EMAIL_USE_TLS',
+        'DJANGO_DEFAULT_FROM_EMAIL', 'DJANGO_PASSWORD_RESET_TIMEOUT',
+        'DJANGO_FRONTEND_BASE_URL',
+    )
+
+    def _boot(self, extra_env, code):
+        """مفسرِ تازه‌ای با متغیرهایِ داده‌شده بالا می‌آورد و نتیجه را برمی‌گرداند."""
+        env = os.environ.copy()
+        env['DJANGO_SETTINGS_MODULE'] = 'backend.settings'
+        for key in self._ENV_KEYS:
+            env.pop(key, None)          # نشتِ محیطِ تست به نتیجه نداشته باشد
+        env.update(extra_env)
+        return subprocess.run(
+            [sys.executable, '-c', code],
+            capture_output=True, text=True, env=env,
+            cwd=str(Path(__file__).resolve().parents[1]),   # پوشه‌ی backend/
+            timeout=90,
+        )
+
+    def test_default_email_settings_are_dev_safe(self):
+        """بدونِ هیچ متغیری: console backend (ایمیل در stdout، بی‌اتصالِ
+        SMTP) + عمرِ یک‌ساعته + مبدأِ runserverِ محلی — نکته‌ی ۶.۱۰."""
+        code = (
+            'import django; django.setup(); from django.conf import settings; '
+            "assert settings.EMAIL_BACKEND == "
+            "'django.core.mail.backends.console.EmailBackend', 'BACKEND'; "
+            'assert settings.PASSWORD_RESET_TIMEOUT == 3600, "TIMEOUT"; '
+            "assert settings.FRONTEND_BASE_URL == 'http://127.0.0.1:8000', 'BASE'; "
+            'assert settings.DEFAULT_FROM_EMAIL == "webmaster@localhost", "FROM"; '
+            'print("dev-ok")'
+        )
+        result = self._boot({}, code)
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn('dev-ok', result.stdout)
+
+    def test_boot_prod_applies_email_env_values(self):
+        """همه‌ی متغیرهایِ ایمیل از محیط خوانده و اعمال می‌شوند."""
+        key = 'p' * 64
+        code = (
+            'import django; django.setup(); from django.conf import settings; '
+            "assert settings.EMAIL_BACKEND == "
+            "'django.core.mail.backends.smtp.EmailBackend', 'BACKEND'; "
+            "assert settings.EMAIL_HOST == 'smtp.example.com', 'HOST'; "
+            'assert settings.EMAIL_PORT == 465, "PORT"; '
+            "assert settings.EMAIL_HOST_USER == 'mailer@example.com', 'USER'; "
+            "assert settings.EMAIL_HOST_PASSWORD == 'secret', 'PASS'; "
+            'assert settings.EMAIL_USE_TLS is False, "TLS"; '
+            "assert settings.DEFAULT_FROM_EMAIL == 'no-reply@example.com', 'FROM'; "
+            'assert settings.PASSWORD_RESET_TIMEOUT == 1800, "TIMEOUT"; '
+            "assert settings.FRONTEND_BASE_URL == 'https://planner.example.com', 'BASE'; "
+            'print("email-ok")'
+        )
+        result = self._boot(
+            {'DJANGO_DEBUG': 'false', 'DJANGO_SECRET_KEY': key,
+             'DJANGO_ALLOWED_HOSTS': 'example.com',
+             'DJANGO_EMAIL_BACKEND': 'django.core.mail.backends.smtp.EmailBackend',
+             'DJANGO_EMAIL_HOST': 'smtp.example.com',
+             'DJANGO_EMAIL_PORT': '465',
+             'DJANGO_EMAIL_HOST_USER': 'mailer@example.com',
+             'DJANGO_EMAIL_HOST_PASSWORD': 'secret',
+             'DJANGO_EMAIL_USE_TLS': 'off',
+             'DJANGO_DEFAULT_FROM_EMAIL': 'no-reply@example.com',
+             'DJANGO_PASSWORD_RESET_TIMEOUT': '1800',
+             'DJANGO_FRONTEND_BASE_URL': 'https://planner.example.com'},
+            code,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn('email-ok', result.stdout)
+
+    def test_boot_prod_warns_on_console_email_backend(self):
+        """DEBUG=false + backendِ console = هشدارِ صادقانه در stderr (بوت
+        متوقف نمی‌شود — الگویِ هشدارهایِ SQLite/throttle)."""
+        key = 'p' * 64
+        result = self._boot(
+            {'DJANGO_DEBUG': 'false', 'DJANGO_SECRET_KEY': key,
+             'DJANGO_ALLOWED_HOSTS': 'example.com'},
+            'import django; django.setup(); print("booted")',
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn('console email backend', result.stderr)
+        self.assertIn('booted', result.stdout)
+
+    def test_boot_invalid_timeout_refuses_to_boot(self):
+        """عمرِ صفر/منفیِ لینک بی‌معناست → fail-fast با نامِ متغیر در پیام."""
+        for bad in ('0', '-60'):
+            result = self._boot({'DJANGO_PASSWORD_RESET_TIMEOUT': bad},
+                                'import django; django.setup()')
+            self.assertNotEqual(result.returncode, 0, msg=bad)
+            self.assertIn('DJANGO_PASSWORD_RESET_TIMEOUT', result.stderr)

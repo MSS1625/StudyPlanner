@@ -444,6 +444,61 @@ if SECURE_HSTS_SECONDS < 0:
 # جنگو (بدونِ پروکسی، خودِ جنگو می‌فهمد).
 SECURE_PROXY_SSL_HEADER = _env_proxy_ssl_header('DJANGO_PROXY_SSL_HEADER')
 
+# ---------------------------------------------------------------------------
+# ایمیل و بازیابیِ رمزِ فراموش‌شده (از 2026-09-12)
+# ---------------------------------------------------------------------------
+# موتورِ ارسالِ ایمیل: پیش‌فرضِ «console» — ایمیل را به‌جایِ ارسالِ واقعی در
+# stdoutِ runserver می‌نویسد. یعنی بدونِ ست‌کردنِ هیچ متغیری، بازیابیِ رمز
+# در توسعه هم کار می‌کند (لینک را از کنسول کپی کنید) و هیچ اتصالِ SMTPای
+# هم تلاش نمی‌شود (الگویِ dev-safe — نکته‌ی ۶.۱۰ AI_CONTEXT). برایِ
+# Production با DJANGO_EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend
+# و چهار متغیرِ SMTP زیر فعالش کنید (جدولِ کامل در 05_deployment.md).
+EMAIL_BACKEND = os.environ.get(
+    'DJANGO_EMAIL_BACKEND', 'django.core.mail.backends.console.EmailBackend'
+)
+
+# تنظیماتِ سرورِ SMTP (فقط وقتی EMAIL_BACKEND SMTP است معنا دارند؛ برایِ
+# backendهایِ console/locmem خوانده نمی‌ند ولی ست‌کردنششان بی‌ضرر است).
+EMAIL_HOST = os.environ.get('DJANGO_EMAIL_HOST', '')
+EMAIL_PORT = _env_int('DJANGO_EMAIL_PORT', default=587)
+EMAIL_HOST_USER = os.environ.get('DJANGO_EMAIL_HOST_USER', '')
+EMAIL_HOST_PASSWORD = os.environ.get('DJANGO_EMAIL_HOST_PASSWORD', '')
+EMAIL_USE_TLS = _env_bool('DJANGO_EMAIL_USE_TLS', default=True)
+
+# آدرسِ فرستنده‌ی پیش‌فرضِ ایمیلهایِ سیستمی (بازیابیِ رمز) — در SMTP واقعی
+# باید با حسابِ ساخت‌یافته در سرویسِ ایمیلِ شما هم‌خوان باشد.
+DEFAULT_FROM_EMAIL = os.environ.get('DJANGO_DEFAULT_FROM_EMAIL', 'webmaster@localhost')
+
+# عمرِ لینکِ بازیابیِ رمز (ثانیه): پیش‌فرضِ جنگو ۳ روز (259200) است؛ برایِ
+# لینکِ امنیتیِ یک‌بارمصرف، یک ساعت استانداردِ رایجِ صنعتی است. با
+# DJANGO_PASSWORD_RESET_TIMEOUT قابلِ تنظیم است.
+PASSWORD_RESET_TIMEOUT = _env_int('DJANGO_PASSWORD_RESET_TIMEOUT', default=3600)
+if PASSWORD_RESET_TIMEOUT <= 0:
+    raise ImproperlyConfigured(
+        'DJANGO_PASSWORD_RESET_TIMEOUT must be > 0 seconds (default: 3600 = '
+        'one hour). A non-positive link lifetime would make recovery unusable.'
+    )
+
+# مبدأِ آدرسِ فرانت‌اند برایِ ساختِ لینکِ داخلِ ایمیلِ بازیابی — سرورِ API
+# خودش صفحه‌ی فرانت‌اند ندارد و باید بداند لینک را به کدام مبدأ بچسباند.
+# پیش‌فرضِ توسعه همان runserverِ محلی است (صفحات در /static/ سرو می‌شوند)؛
+# در Production آدرسِ عمومیِ سایت (https://...) را ست کنید.
+FRONTEND_BASE_URL = (os.environ.get('DJANGO_FRONTEND_BASE_URL') or 'http://127.0.0.1:8000').rstrip('/')
+
+# هشدارِ یک‌خطی برایِ «Production با موتورِ console»: با این موتور ایمیل
+# به stdoutِ worker می‌رود (ژورنالِ systemd) نه به صندوقِ کاربر — بازیابیِ
+# رمز عملاً از کار می‌افتد. مثلِ هشدارهایِ SQLite/throttle فقط رویِ stderr
+# می‌نویسد و بوت را متوقف نمی‌کند (سپرِ سختِ Production سرِ جایش ایستاده).
+if not DEBUG and EMAIL_BACKEND == 'django.core.mail.backends.console.EmailBackend':
+    import sys as _sys_email
+    _sys_email.stderr.write(
+        'Warning: DJANGO_DEBUG=false is running with the console email '
+        'backend (emails go to stdout, not to users — password recovery will '
+        'not reach anyone). For real deployment set DJANGO_EMAIL_BACKEND='
+        'django.core.mail.backends.smtp.EmailBackend plus the SMTP variables '
+        '(see docs/05_deployment.md).\n'
+    )
+
 # REST Framework settings
 # تنظیماتِ سراسریِ DRF: همه‌ی Viewها به‌صورت پیش‌فرض این دو رفتار را دارند
 # مگر این‌که در خودِ آن View چیز دیگری مشخص شده باشد.
