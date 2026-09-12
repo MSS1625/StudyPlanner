@@ -249,6 +249,15 @@ const TRANSLATIONS = {
     "بازگشت به صفحه ورود": "Back to the login page",
     "این صفحه فقط از طریقِ لینکِ ایمیلِ بازیابی معنا دارد؛ لینک را از ایمیلِ دریافتی دوباره باز کنید.": "This page only makes sense via the recovery link from your email; please reopen it from the email you received.",
     "رمز عبور با موفقیت بازنشانی شد.": "Your password has been reset successfully.",
+    // --- فعالیت‌هایِ امنیتی (از 2026-09-12) ---
+    "فعالیت‌های امنیتی": "Security Activity",
+    "رویدادهای امنیتی": "Security Events",
+    "آخرین فعالیت‌های امنیتیِ حسابِ شما": "Recent security activity on your account",
+    "بستن": "Close",
+    "در حالِ دریافتِ رویدادها...": "Loading events...",
+    "هنوز رویدادی ثبت نشده است.": "No security events recorded yet.",
+    "خطا در دریافتِ رویدادها.": "Failed to load security events.",
+    "ناشناس": "Unknown",
 };
 
 // زبانِ فعال: فقط «en» ترجمه می‌شود؛ هر مقدارِ دیگر = فارسی (پیش‌فرض)

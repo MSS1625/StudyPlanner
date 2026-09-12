@@ -373,8 +373,9 @@ curl -sI https://your-domain.com/api/health/ | grep -i strict-transport
 
 ## ۵.۱۲ ایمیلِ بازیابیِ رمز — SMTP (از 2026-09-12)
 
-بازیابیِ رمزِ فراموش‌شده (`POST /api/auth/password/reset/` + لینکِ یک‌بارمصرف) تنها مصرف‌کننده‌ی ایمیلِ
-پروژه است. در توسعه موتورِ `console` لینک را در stdoutِ runserver می‌نویسد (بی‌SMTP — الگویِ dev-safe)؛
+بازیابیِ رمزِ فراموش‌شده (`POST /api/auth/password/reset/` + لینکِ یک‌بارمصرف) و اطلاع‌رسانیِ امنیتیِ
+تغییر/بازنشانیِ رمز (از 2026-09-12 — ایمیلِ «اگر شما نبودید...» با IPِ فرستنده) دو مصرف‌کننده‌ی ایمیلِ
+پروژه‌اند؛ هر دو از همان موتور و همان متغیرها استفاده می‌کنند. در توسعه موتورِ `console` لینک را در stdoutِ runserver می‌نویسد (بی‌SMTP — الگویِ dev-safe)؛
 در Production سه قدم:
 
 1. **SMTP در `.env`**: `DJANGO_EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend` + پنج متغیرِ

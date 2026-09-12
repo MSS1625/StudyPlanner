@@ -45,13 +45,16 @@ from django.utils.translation import gettext as _
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.db import IntegrityError, transaction
 from django.db.models import Q
+# لاگِ سرور-محورِ مشترک (از 2026-09-12): اطلاع‌رسانیِ امنیتیِ ایمیل و شکستِ
+# ارسالِ آن (مثلِ بازیابیِ رمز) — یک logger در سطحِ ماژول، الگویِ استانداردِ جنگو.
+import logging
 # پایشِ سلامت (از 2026-09-10): اتصالِ زندهٔ دیتابیس برای endpointِ health و
 # تنظیماتِ جاری (نمایشِ DEBUG) — هر دو فقط «خواندن» هستند.
 from django.db import connection
 from django.conf import settings
 
-from .models import Subject, Exam, StudyPlan, StudyLog, UserSecurityProfile
-from .serializers import UserSerializer, SubjectSerializer, ExamSerializer, StudyPlanSerializer, StudyLogSerializer
+from .models import Subject, Exam, StudyPlan, StudyLog, UserSecurityProfile, SecurityEvent
+from .serializers import UserSerializer, SubjectSerializer, ExamSerializer, StudyPlanSerializer, StudyLogSerializer, SecurityEventSerializer
 from .utils import generate_study_plan, format_plan_for_frontend, build_subject_distribution, compute_subject_progress
 # مؤلفه‌ی یادگیریِ آماری (از 2026-09-09): مدلِ کالیبراسیونِ «تخمینِ ساعتیِ
 # کاربر ↔ واقعیتِ ثبت‌شده» + پیش‌بینیِ ساعتِ واقعیِ موردنیاز و ریسکِ
@@ -60,6 +63,10 @@ from .ml import get_prediction_report
 # محدودسازیِ نرخِ درخواست روی مسیرهایِ احرازِ هویت (از 2026-09-10): جلوگیری از
 # حمله‌ی حدسِ رمز (brute-force) — نرخ از متغیرِ محیطیِ DJANGO_AUTH_THROTTLE_RATE.
 from .throttles import AuthBurstThrottle
+
+# لاگرِ ماژول — همه‌ی رشته‌هایِ «خطای زیرساختی که نباید به پاسخِ HTTP بریزد»
+# از این‌جا می‌گذرند (شکستِ SMTP در اطلاع‌رسانیِ امنیتی/بازیابی).
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -107,11 +114,35 @@ def login(request):
     # داشت، آبجکتِ کاربر را برمی‌گرداند، وگرنه None
     user = authenticate(username=username, password=password)
     if user:
+        # لاگِ رویدادهایِ امنیتی (از 2026-09-12): هر ورودِ موفق در تاریخچه‌ی
+        # حسابِ خودِ کاربر ثبت می‌شود (IP + User-Agent) — کاربر می‌تواند از
+        # GET /api/auth/security/events/ ببیند «چه وقلی از کجا» وارد شده است.
+        SecurityEvent.record(
+            user=user,
+            event_type=SecurityEvent.EventType.LOGIN_SUCCESS,
+            request=request,
+        )
         refresh = RefreshToken.for_user(user)
         return Response({
             'refresh': str(refresh),
             'access': str(refresh.access_token),
         })
+    # تلاشِ ناموفق — فقط برای «کاربرِ موجودِ فعال» ثبت می‌شود (کاربرِ ناموجود
+    # که رویدادی ندارد که به آن بچسبد؛ کاربرِ غیرفعال هم که لاگین نمی‌بیند).
+    # iexact عمداً: جابه‌جاییِ حروفِ بزرگ/کوچکِ نامِ کاربری هم برایِ مالکِ واقعی
+    # قابل‌مشاهده باشد — این داده فقط با توکنِ خودِ کاربر خوانده می‌شود و
+    # هیچ اثری در «پاسخِ» این مسیر نمی‌گذارد (پیامِ خطا برایِ موجود/ناموجود
+    # یکسان باقی می‌ماند).
+    if username:
+        attempted_user = User.objects.filter(
+            username__iexact=username, is_active=True,
+        ).first()
+        if attempted_user is not None:
+            SecurityEvent.record(
+                user=attempted_user,
+                event_type=SecurityEvent.EventType.LOGIN_FAILED,
+                request=request,
+            )
     return Response({'error': _('نام کاربری یا رمز عبور اشتباه است')}, status=status.HTTP_401_UNAUTHORIZED)
 
 
@@ -144,6 +175,66 @@ def _invalidate_all_sessions(user):
     )
     for outstanding in OutstandingToken.objects.filter(user=user):
         BlacklistedToken.objects.get_or_create(token=outstanding)
+
+
+def _send_password_notification(user, event):
+    """ایمیلِ اطلاع‌رسانیِ امنیتی بعد از تغییر/بازنشانیِ رمز (از 2026-09-12).
+
+    روی «رویدادهایِ پُرسیگنال» فرستاده می‌شود — تغییرِ رمز (توسطِ خودِ کاربر)
+    و بازنشانیِ رمز (با لینکِ بازیابی) — نه روی هر ورود/تلاشِ ورود (سروصدای
+    بی‌فایده و ابزارِ بمبارانِ صندوقِ کاربر با لاگین‌هایِ ناموفق).
+
+    قواعد:
+    - بدونِ ایمیلِ ثبت‌شده → هیچ کاری نمی‌کند (بی‌صدا و بی‌خطا).
+    - شکستِ SMTP → ثبت در لاگِ سرور و بلعیده می‌شود (logger.exception) —
+      اطلاع‌رسانیِ «لطفاً» نباید مسیرِ اصلی (خودِ تغییر/بازنشانی) را ۵۰۰ کند.
+      الگویِ همانِ views.password_reset_request.
+    - متن‌ها gettext هستند (fa/en با Accept-Language در لحظه‌ی درخواست).
+    - ایمیلِ رخدادِ بازنشانی به‌علاوه توصیه‌ی «اگر شما نبودید» دارد چون
+      نشانه‌ی جدیِ تلاشِ موفق مهاجم است؛ تغییرِ رمز هم همین توصیه را دارد.
+
+    ورودیِ event = رکوردِ SecurityEventِ همین لحظه — برایِ متنِ ایمیل (نوعِ
+    رویداد + IPِ فرستنده) استفاده می‌شود.
+    """
+    if not user.email:
+        return
+
+    is_reset = event.event_type == SecurityEvent.EventType.PASSWORD_RESET_COMPLETED
+    if is_reset:
+        subject = _('بازنشانیِ رمزِ عبور — برنامه‌ریزِ هوشمندِ مطالعه')
+        body = _(
+            'سلام %(username)s،\n\n'
+            'رمزِ عبورِ حسابِ شما با لینکِ بازیابی بازنشانی شد و همه‌ی '
+            'نشست‌هایِ قبلی باطل شدند.\n'
+            'نشانیِ فرستنده: %(ip)s\n\n'
+            'اگر این کار را شما کرده‌اید، با رمزِ جدید وارد شوید.\n'
+            'اگر شما این کار را نکرده‌اید، همین حالا از صفحه‌ی ورود با '
+            '«رمز را فراموش کرده‌اید؟» دوباره رمز را بازنشانی کنید.'
+        ) % {
+            'username': user.get_username(),
+            'ip': event.ip_address or _('نامشخص'),
+        }
+    else:
+        subject = _('تغییرِ رمزِ عبور — برنامه‌ریزِ هوشمندِ مطالعه')
+        body = _(
+            'سلام %(username)s،\n\n'
+            'رمزِ عبورِ حسابِ شما تغییر کرد و همه‌ی نشست‌هایِ دیگر باطل شدند.\n'
+            'نشانیِ فرستنده: %(ip)s\n\n'
+            'اگر این تغییر را شما انجام داده‌اید، نیازی به هیچ کاری نیست.\n'
+            'اگر شما این تغییر را نکرده‌اید، همین حالا از صفحه‌ی ورود با '
+            '«رمز را فراموش کرده‌اید؟» رمز را بازنشانی کنید.'
+        ) % {
+            'username': user.get_username(),
+            'ip': event.ip_address or _('نامشخص'),
+        }
+
+    try:
+        send_mail(subject, body, settings.DEFAULT_FROM_EMAIL, [user.email])
+    except Exception:  # noqa: BLE001 — نیتِ صریح: پنهان‌سازی از پاسخِ HTTP
+        logger.exception(
+            'security notification email failed for user pk=%s event=%s',
+            user.pk, event.event_type,
+        )
 
 
 @api_view(['POST'])
@@ -195,11 +286,22 @@ def change_password(request):
     # لایه‌ی ۳: اعمالِ اتمیک. set_password رمز را هش می‌کند (هرگز رمزِ خام
     # ذخیره نمی‌شود)؛ سپس همه‌ی توکن‌هایِ Refreshِ برجسته باطل و لحظه‌ی تغییر
     # ثبت می‌شود. ترتیب داخلِ transaction: یا همه، یا هیچ (از 2026-09-12
-    # بدنه‌ی مشترک در _invalidate_all_sessions زندگی می‌کند).
+    # بدنه‌ی مشترک در _invalidate_all_sessions زندگی می‌کند). ضبطِ رویدادِ
+    # امنیتی (password_changed) هم داخلِ همین تراکنش است تا «رمز عوض شد» و
+    # «رویدادش ثبت شد» جدایی‌ناپذیر باشند.
     with transaction.atomic():
         request.user.set_password(new_password)
         request.user.save(update_fields=['password'])
         _invalidate_all_sessions(request.user)
+        event = SecurityEvent.record(
+            user=request.user,
+            event_type=SecurityEvent.EventType.PASSWORD_CHANGED,
+            request=request,
+        )
+
+    # اطلاع‌رسانیِ ایمیلیِ امنیتی — بعد از commit (ایمیل داخلِ تراکنشِ DB
+    # نمی‌نشیند)؛ شکستِ ارسالِ آن مسیرِ اصلی را خراب نمی‌کند.
+    _send_password_notification(request.user, event)
 
     # جفتِ توکنِ تازه «بعد ازِ» سیاه‌کردنِ قدیمی‌ها صادر می‌شود تا خودش
     # در لیستِ سیاه نیفتد؛ iat آن >= لحظه‌ی تغییر است (مرزِ همان‌ثانیه در
@@ -257,6 +359,21 @@ def password_reset_request(request):
         is_active=True,
     ).first()
 
+    # لاگِ رویدادهایِ امنیتی (از 2026-09-12): درخواستِ بازیابی برایِ حسابِ
+    # موجودِ فعال ثبت می‌شود — کاربر بعداً می‌بیند که «درخواستِ بازیابی برایِ
+    # حسابِ من ثبت شد» (حتی اگر ایمیلِ ثبت‌شده نداشته باشد و لینکی نرفته
+    # باشد — خودِ دانستنِ این تلاش، ارزشِ امنیتی دارد).
+    # قراردادِ ضدِ کشفِ حسابِ همین docstring دست‌نخورده می‌ماند: این ثبتِ داخلی
+    # هیچ اثری در «پاسخِ» HTTP نمی‌گذارد (بدنه/وضعیت یکسان)؛ تفاوتِ زمانِ
+    # اجرا (یک INSERT) هم در برابرِ تفاوتِ زمانِ ارسالِ SMTP که از قبل
+    # وجود داشت، ناچیز و غیرقابل‌تشخیص است.
+    if user is not None:
+        SecurityEvent.record(
+            user=user,
+            event_type=SecurityEvent.EventType.PASSWORD_RESET_REQUESTED,
+            request=request,
+        )
+
     # فقط برایِ حسابِ موجودِ ایمیل‌دار ایمیل می‌رود — بقیه‌ی حالت‌ها به همین
     # جمله‌ی عمومیِ پایین می‌رسند و فرقشان فقط «ایمیل نرفتن» است.
     if user is not None and user.email:
@@ -289,8 +406,7 @@ def password_reset_request(request):
         except Exception:  # noqa: BLE001 — نیتِ صریح: پنهان‌سازی از پاسخِ HTTP
             # شکستِ SMTP نباید به کاربرِ بی‌اطلاع ۵۰۰ بدهد (کانالِ نشتِ
             # موجود/ناموجود)؛ در لاگِ سرور با سطحِ ERROR باقی می‌ماند.
-            import logging
-            logging.getLogger(__name__).exception(
+            logger.exception(
                 'password reset email delivery failed for user pk=%s', user.pk
             )
 
@@ -368,15 +484,63 @@ def password_reset_confirm(request):
     # اعمالِ اتمیک — و آن‌قدر مهم که دوباره گفته شود: set_password هش
     # می‌کند (رمزِ خام هرگز ذخیره نمی‌شود) و _invalidate_all_sessions همه‌ی
     # نشست‌هایِ قدیمی (Refresh + دسترسی) را می‌کشد. توکنِ بازیابی هم با
-    # همین تغییر مرد (هشِ رمز در توکن است) — یعنی یک‌بارمصرف.
+    # همین تغییر مرد (هشِ رمز در توکن است) — یعنی یک‌بارمصرف. ضبطِ رویدادِ
+    # امنیتی (password_reset_completed) هم داخلِ همین تراکنش است تا با
+    # خودِ بازنشانی جدایی‌ناپذیر بماند.
     with transaction.atomic():
         user.set_password(new_password)
         user.save(update_fields=['password'])
         _invalidate_all_sessions(user)
+        event = SecurityEvent.record(
+            user=user,
+            event_type=SecurityEvent.EventType.PASSWORD_RESET_COMPLETED,
+            request=request,
+        )
+
+    # اطلاع‌رسانیِ ایمیلیِ امنیتی — بعد از commit؛ شکستِ ارسالِ آن مسیرِ
+    # اصلی (خودِ بازنشانی) را خراب نمی‌کند (قواعد در _send_password_notification).
+    _send_password_notification(user, event)
 
     return Response({
         'detail': _('رمز عبور با موفقیت بازنشانی شد؛ لطفاً با رمزِ جدید وارد شوید.'),
     })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def security_events(request):
+    """تاریخچه‌ی رویدادهایِ امنیتیِ حسابِ خودِ کاربر (از 2026-09-12) — GET /api/auth/security/events/
+
+    فقط با توکنِ خودِ کاربر جواب می‌دهد (جداسازی کامل — کاربر هیچ راهی
+    برایِ دیدنِ رویدادهایِ کاربرِ دیگر ندارد؛ رکوردها در خودِ دیتابیس به
+    user قید شده‌اند و فیلترِ پرس‌وجو هم رویِ request.user است، پس حتی
+    حدسِ id یا دستکاریِ پارامتر راهی نمی‌بازد).
+
+    خروجی: آرایه‌ی JSON از تازه‌ترین رویدادها (نوبتِ Meta.ordering)؛ هر
+    آیتم شکلِ SecurityEventSerializer را دارد: type (کلیدِ ثابت) + label
+    (ترجمه‌شده با Accept-Language) + created_at (ISO) + ip + user_agent.
+
+    پارامترِ اختیاریِ ?limit=N (۱ تا ۲۰۰؛ پیش‌فرضِ ۵۰) — مقدارهایِ خارج از
+    بازه/غیرعددی به همان پیش‌فرض/مرز برمی‌گردند (رفتارِ همیشه‌معلوم، نه
+    خطا: یک پارامترِ «تعدادِ نمایش» نباید درخواست را خراب کند).
+
+    محدودسازیِ نرخ: پیش‌فرضِ سراسریِ scopeِ 'user' (به‌ازایِ کاربرِ لاگین‌شده)
+    — این مسیر فقط خواندنی و سبک است و سقفِ عام کافی است.
+    """
+    raw_limit = request.query_params.get('limit')
+    limit = 50
+    if raw_limit is not None:
+        try:
+            limit = int(raw_limit)
+        except (TypeError, ValueError):
+            limit = 50
+    # مهارِ مرزها: کمتر از ۱ → ۱؛ بیشتر از ۲۰۰ → ۲۰۰ (سقفِِ نگه‌داری هم
+    # ۲۰۰ است — نمی‌شود بیشتر از چیزی که نگه می‌داریم خواست).
+    limit = max(1, min(limit, 200))
+
+    events = SecurityEvent.objects.filter(user=request.user)[:limit]
+    serializer = SecurityEventSerializer(events, many=True)
+    return Response(serializer.data)
 
 
 # ---------------------------------------------------------------------------

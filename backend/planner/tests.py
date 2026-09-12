@@ -75,7 +75,7 @@ from backend.settings import (
     _env_throttle_rate,
     _resolve_database,
 )
-from .models import Subject, Exam, StudyLog, StudyPlan, UserSecurityProfile
+from .models import Subject, Exam, StudyLog, StudyPlan, UserSecurityProfile, SecurityEvent
 from .utils import (
     compute_subject_progress,
     generate_study_plan,
@@ -3804,3 +3804,496 @@ class PasswordResetSettingsTests(SimpleTestCase):
                                 'import django; django.setup()')
             self.assertNotEqual(result.returncode, 0, msg=bad)
             self.assertIn('DJANGO_PASSWORD_RESET_TIMEOUT', result.stderr)
+
+
+# ---------------------------------------------------------------------------
+# ۱۹) لاگِ رویدادهایِ امنیتی (از 2026-09-12) — مدلِ SecurityEvent + ضبط در
+# پنج نقطه (login موفق/ناموفق، تغییرِ رمز، درخواست/تأییدِ بازیابی) +
+# GET /api/auth/security/events/ + ایمیلِ اطلاع‌رسانیِ امنیتی.
+# ایمیل‌هایِ اطلاع‌رسانی با backendِ locmem جمع می‌شوند (mail.outbox).
+# ---------------------------------------------------------------------------
+
+from django.test import RequestFactory
+
+_EVENTS_URL = '/api/auth/security/events/'
+# کارخانه‌ی درخواستِ خام برایِ تستِ مستقیمِ SecurityEvent.record بدونِ عبور از
+# API (META با REMOTE_ADDR/HTTP_USER_AGENT به‌صورتِ واقعی ست می‌شود — همان
+# چیزی که get_identِ throttle می‌خواند).
+_request_factory = RequestFactory()
+
+
+def _direct_request(user_agent='AuditTestAgent/2.0', remote_addr='203.0.113.9'):
+    """درخواستِ ساختگی با IP/UA دلخواه — فقط برایِ فراخوانیِ مستقیمِ record."""
+    return _request_factory.post(
+        '/api/auth/login/', REMOTE_ADDR=remote_addr, HTTP_USER_AGENT=user_agent,
+    )
+
+
+class SecurityEventModelTests(BaseAPITestCase):
+    """SecurityEvent.record — تنها نقطه‌ی نوشتنِ جدول: IP/UA از درخواست،
+    هرسِ سقفِ نگه‌داری (فقط هم‌کاربر)، ترتیبِ قطعی، حذفِ آبشاری."""
+
+    def test_record_captures_ip_and_user_agent_from_request(self):
+        event = SecurityEvent.record(
+            user=self.alice,
+            event_type=SecurityEvent.EventType.LOGIN_SUCCESS,
+            request=_direct_request(),
+        )
+        self.assertEqual(event.ip_address, '203.0.113.9')
+        self.assertEqual(event.user_agent, 'AuditTestAgent/2.0')
+        self.assertEqual(event.user, self.alice)
+        self.assertEqual(event.event_type, SecurityEvent.EventType.LOGIN_SUCCESS)
+
+    def test_record_without_request_stores_null_ip_and_empty_agent(self):
+        """فراخوانیِ برنامه‌ای بدونِ request → ip=None و UA='' (نه خطا)."""
+        event = SecurityEvent.record(
+            user=self.bob,
+            event_type=SecurityEvent.EventType.PASSWORD_CHANGED,
+        )
+        self.assertIsNone(event.ip_address)
+        self.assertEqual(event.user_agent, '')
+
+    def test_user_agent_is_truncated_to_300_chars(self):
+        long_agent = 'x' * 500
+        event = SecurityEvent.record(
+            user=self.alice,
+            event_type=SecurityEvent.EventType.LOGIN_SUCCESS,
+            request=_direct_request(user_agent=long_agent),
+        )
+        self.assertEqual(len(event.user_agent), 300)
+        self.assertEqual(event.user_agent, 'x' * 300)
+
+    def test_record_prunes_events_beyond_retention_limit(self):
+        """رگرسیونِ هرس: با سقفِ موقتِ ۳، پنج ثبتِ پیاپی فقط ۳ رویدادِ
+        تازه را نگه می‌دارد (جدول هرگز بی‌سقف رشد نمی‌کند)."""
+        types = [
+            SecurityEvent.EventType.LOGIN_SUCCESS,
+            SecurityEvent.EventType.LOGIN_FAILED,
+            SecurityEvent.EventType.PASSWORD_CHANGED,
+            SecurityEvent.EventType.PASSWORD_RESET_REQUESTED,
+            SecurityEvent.EventType.PASSWORD_RESET_COMPLETED,
+        ]
+        with patch.object(SecurityEvent, 'RETENTION_LIMIT', 3):
+            for one_type in types:
+                SecurityEvent.record(user=self.alice, event_type=one_type)
+        remaining = SecurityEvent.objects.filter(user=self.alice)
+        self.assertEqual(remaining.count(), 3)
+        # تازه‌ترین‌ها می‌مانند — ترتیبِ Meta.ordering (جدیدترین اول):
+        self.assertEqual(
+            [e.event_type for e in remaining],
+            [
+                SecurityEvent.EventType.PASSWORD_RESET_COMPLETED,
+                SecurityEvent.EventType.PASSWORD_RESET_REQUESTED,
+                SecurityEvent.EventType.PASSWORD_CHANGED,
+            ],
+        )
+
+    def test_prune_only_touches_the_same_user(self):
+        """هرسِ آلیس، رویدادهایِ باب را لمس نمی‌کند (کلیدِ هرس = user)."""
+        with patch.object(SecurityEvent, 'RETENTION_LIMIT', 2):
+            for _ in range(4):
+                SecurityEvent.record(
+                    user=self.alice,
+                    event_type=SecurityEvent.EventType.LOGIN_SUCCESS,
+                )
+            SecurityEvent.record(
+                user=self.bob,
+                event_type=SecurityEvent.EventType.LOGIN_FAILED,
+            )
+            SecurityEvent.record(
+                user=self.bob,
+                event_type=SecurityEvent.EventType.PASSWORD_CHANGED,
+            )
+        self.assertEqual(
+            SecurityEvent.objects.filter(user=self.alice).count(), 2,
+        )
+        # باب زیرِ سقف است → هر دو رویدادش سالم:
+        self.assertEqual(
+            SecurityEvent.objects.filter(user=self.bob).count(), 2,
+        )
+
+    def test_ordering_is_newest_first(self):
+        SecurityEvent.record(
+            user=self.alice,
+            event_type=SecurityEvent.EventType.LOGIN_SUCCESS,
+        )
+        SecurityEvent.record(
+            user=self.alice,
+            event_type=SecurityEvent.EventType.PASSWORD_CHANGED,
+        )
+        events = SecurityEvent.objects.filter(user=self.alice)
+        self.assertEqual(events[0].event_type,
+                         SecurityEvent.EventType.PASSWORD_CHANGED)
+
+    def test_str_representation(self):
+        event = SecurityEvent.record(
+            user=self.alice,
+            event_type=SecurityEvent.EventType.LOGIN_FAILED,
+        )
+        self.assertIn('alice', str(event))
+        self.assertIn('login_failed', str(event))
+
+    def test_deleting_user_cascades_events(self):
+        SecurityEvent.record(
+            user=self.bob,
+            event_type=SecurityEvent.EventType.LOGIN_SUCCESS,
+        )
+        self.assertEqual(SecurityEvent.objects.filter(user=self.bob).count(), 1)
+        self.bob.delete()
+        self.assertEqual(SecurityEvent.objects.count(), 0)
+
+
+class LoginAuditRecordingTests(BaseAPITestCase):
+    """ضبطِ رویداد در خودِ مسیرِ login — موفق، ناموفقِ کاربرِ موجود،
+    ناموجود (هیچ)، جابه‌جاییِ حروف (iexact)، غیرفعال (هیچ)."""
+
+    def test_successful_login_records_login_success(self):
+        resp = self.client.post(
+            '/api/auth/login/',
+            {'username': 'alice', 'password': 'pw-12345678'},
+            format='json', HTTP_USER_AGENT='Firefox/130.0',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        events = SecurityEvent.objects.filter(user=self.alice)
+        self.assertEqual(events.count(), 1)
+        event = events.first()
+        self.assertEqual(event.event_type,
+                         SecurityEvent.EventType.LOGIN_SUCCESS)
+        # IP و UA از درخواستِ واقعیِ تست (کلاینتِ DRF = 127.0.0.1):
+        self.assertEqual(event.ip_address, '127.0.0.1')
+        self.assertEqual(event.user_agent, 'Firefox/130.0')
+
+    def test_failed_login_records_login_failed_for_existing_user(self):
+        resp = self.client.post(
+            '/api/auth/login/',
+            {'username': 'alice', 'password': 'wrong-password'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+        events = SecurityEvent.objects.filter(user=self.alice)
+        self.assertEqual(events.count(), 1)
+        self.assertEqual(events.first().event_type,
+                         SecurityEvent.EventType.LOGIN_FAILED)
+
+    def test_failed_login_for_unknown_username_records_nothing(self):
+        """کاربرِ ناموجود رویدادی ندارد که به آن بچسبد — و پیامِ خطا هم
+        (قراردادِ همیشگی) با حالتِ موجود یکسان می‌ماند."""
+        resp = self.client.post(
+            '/api/auth/login/',
+            {'username': 'ghost-user', 'password': 'whatever'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(SecurityEvent.objects.count(), 0)
+
+    def test_failed_login_username_match_is_case_insensitive(self):
+        """«ALICE» با رمزِ غلط هم برایِ مالکِ واقعی ثبت می‌شود (iexact عمدی —
+        لاگِ خصوصیِ خودِ کاربر است، نه کانالِ عمومی)."""
+        resp = self.client.post(
+            '/api/auth/login/',
+            {'username': 'ALICE', 'password': 'wrong'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+        events = SecurityEvent.objects.filter(user=self.alice)
+        self.assertEqual(events.count(), 1)
+        self.assertEqual(events.first().event_type,
+                         SecurityEvent.EventType.LOGIN_FAILED)
+
+    def test_inactive_user_attempt_records_nothing(self):
+        """کاربرِ غیرفعال (حتی با رمزِ درست) → ۴۰۱ و هیچ رویدادی — کاربرِ
+        غیرفعال لاگینی نمی‌بیند که تاریخچه‌اش معنا داشته باشد."""
+        self.alice.is_active = False
+        self.alice.save(update_fields=['is_active'])
+        resp = self.client.post(
+            '/api/auth/login/',
+            {'username': 'alice', 'password': 'pw-12345678'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(SecurityEvent.objects.count(), 0)
+
+
+class SecurityEventsAPITests(BaseAPITestCase):
+    """GET /api/auth/security/events/ — احرازِ هویت، جداسازیِ کاربران،
+    ترتیب، شکلِ آیتم، ترجمه‌ی برچسب، مهارِ limit، ادغام با مسیرهایِ دیگر."""
+
+    def test_endpoint_requires_authentication(self):
+        resp = self.client.get(_EVENTS_URL)
+        self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_returns_only_own_events_not_other_users(self):
+        """جداسازی: رویدادهایِ آلیس فقط با توکنِ آلیس؛ باب هیچ‌کدام را
+        نمی‌بیند (نه با حدسِ پارامتر — اصلاً پارامتری برایش نیست)."""
+        SecurityEvent.record(
+            user=self.alice,
+            event_type=SecurityEvent.EventType.LOGIN_SUCCESS,
+        )
+        SecurityEvent.record(
+            user=self.alice,
+            event_type=SecurityEvent.EventType.LOGIN_FAILED,
+        )
+        resp_bob = self.client_as(self.bob).get(_EVENTS_URL)
+        self.assertEqual(resp_bob.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp_bob.json(), [])
+        resp_alice = self.client_as(self.alice).get(_EVENTS_URL)
+        self.assertEqual(len(resp_alice.json()), 2)
+
+    def test_event_item_shape_and_fa_labels_by_default(self):
+        SecurityEvent.record(
+            user=self.alice,
+            event_type=SecurityEvent.EventType.LOGIN_FAILED,
+            request=_direct_request(),
+        )
+        resp = self.client_as(self.alice).get(_EVENTS_URL)
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        item = resp.json()[0]
+        self.assertEqual(
+            set(item.keys()),
+            {'type', 'label', 'created_at', 'ip', 'user_agent'},
+        )
+        self.assertEqual(item['type'], 'login_failed')
+        # زبانِ پیش‌فرض = فارسی (بدونِ Accept-Language → متنِ اصلی):
+        self.assertEqual(item['label'], 'تلاشِ ناموفقِ ورود')
+        self.assertEqual(item['ip'], '203.0.113.9')
+        self.assertEqual(item['user_agent'], 'AuditTestAgent/2.0')
+        self.assertIn('T', item['created_at'])  # ISO 8601
+
+    def test_labels_translate_with_accept_language_en(self):
+        SecurityEvent.record(
+            user=self.alice,
+            event_type=SecurityEvent.EventType.PASSWORD_CHANGED,
+        )
+        resp = self.client_as(self.alice).get(
+            _EVENTS_URL, HTTP_ACCEPT_LANGUAGE='en',
+        )
+        self.assertEqual(resp.json()[0]['label'], 'Password changed')
+
+    def test_limit_parameter_default_and_clamping(self):
+        for _ in range(3):
+            SecurityEvent.record(
+                user=self.alice,
+                event_type=SecurityEvent.EventType.LOGIN_SUCCESS,
+            )
+        base = self.client_as(self.alice)
+        self.assertEqual(len(base.get(_EVENTS_URL).json()), 3)  # پیش‌فرض ۵۰ → همه
+        self.assertEqual(len(base.get(f'{_EVENTS_URL}?limit=2').json()), 2)
+        # مقدارهایِ بی‌معنا به رفتارِ همیشه‌معلوم برمی‌گردند (نه خطا):
+        self.assertEqual(len(base.get(f'{_EVENTS_URL}?limit=abc').json()), 3)
+        self.assertEqual(len(base.get(f'{_EVENTS_URL}?limit=-5').json()), 1)
+        self.assertEqual(len(base.get(f'{_EVENTS_URL}?limit=0').json()), 1)
+
+    def test_limit_is_capped_at_200_even_if_more_rows_exist(self):
+        """سقفِِ API هم ۲۰۰ است (نه فقط سقفِِ نگه‌داری) — ۲۰۵ رکوردِ مستقیم
+        (دورِ زدنِ record برایِ شبیه‌سازیِ انباشتِ فرضیِ قدیمی) فقط ۲۰۰تا
+        برمی‌گردند."""
+        SecurityEvent.objects.bulk_create([
+            SecurityEvent(
+                user=self.alice,
+                event_type=SecurityEvent.EventType.LOGIN_SUCCESS,
+            )
+            for _ in range(205)
+        ])
+        self.assertEqual(
+            SecurityEvent.objects.filter(user=self.alice).count(), 205,
+        )
+        resp = self.client_as(self.alice).get(f'{_EVENTS_URL}?limit=999')
+        self.assertEqual(len(resp.json()), 200)
+
+    def test_post_method_not_allowed(self):
+        resp = self.client_as(self.alice).post(_EVENTS_URL, {}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+
+    def test_change_password_flow_appears_in_events(self):
+        """ادغام: تغییرِ رمز از طریقِ API → رویدادِ password_changed در
+        تازه‌ترین ردیفِ همان کاربر (و فقط همان کاربر)."""
+        resp = self.client_as(self.alice).post(
+            '/api/auth/password/',
+            {'current_password': 'pw-12345678',
+             'new_password': 'pw-new-strong-456'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        events = SecurityEvent.objects.filter(user=self.alice)
+        self.assertEqual(events.count(), 1)
+        self.assertEqual(events.first().event_type,
+                         SecurityEvent.EventType.PASSWORD_CHANGED)
+        self.assertEqual(
+            SecurityEvent.objects.filter(user=self.bob).count(), 0,
+        )
+
+    @override_settings(**_LOCMEM)
+    def test_password_reset_flow_appears_in_events(self):
+        """ادغام: کلِ جریانِ بازیابی → دو رویدادِ درخواست و بازنشانی،
+        به‌علاوه‌ی یک رویدادِ ورودِ موفقِ بعدی با رمزِ جدید."""
+        self.alice.email = 'alice@example.com'
+        self.alice.save(update_fields=['email'])
+        resp = self.client.post(
+            _RESET_URL, {'identifier': 'alice'}, format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        uid, token = _make_reset_link(self.alice)
+        resp = self.client.post(
+            _RESET_CONFIRM_URL,
+            {'uid': uid, 'token': token,
+             'new_password': 'pw-new-strong-456'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        # ورودِ موفق با رمزِ جدید — تا هر سه رویدادِ جریان در یک تست جمع شوند:
+        resp = self.client.post(
+            '/api/auth/login/',
+            {'username': 'alice', 'password': 'pw-new-strong-456'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        types = list(
+            SecurityEvent.objects.filter(user=self.alice)
+            .values_list('event_type', flat=True)
+        )
+        # ترتیبِ نمایش (جدیدترین اول): ورود، بازنشانی، درخواست:
+        self.assertEqual(types, [
+            SecurityEvent.EventType.LOGIN_SUCCESS,
+            SecurityEvent.EventType.PASSWORD_RESET_COMPLETED,
+            SecurityEvent.EventType.PASSWORD_RESET_REQUESTED,
+        ])
+
+
+@override_settings(**_LOCMEM)
+class SecurityNotificationEmailTests(BaseAPITestCase):
+    """ایمیلِ اطلاع‌رسانیِ امنیتی (فقط تغییر/بازنشانیِ رمز — نه ورود):
+    محتوا، نبودِِ ایمیل برایِ بی‌ایمیل‌ها، بلعیدنِ شکستِ SMTP، ترجمه‌ی en."""
+
+    def _change_password(self, user, old, new, **client_kwargs):
+        return self.client_as(user).post(
+            '/api/auth/password/',
+            {'current_password': old, 'new_password': new},
+            format='json', **client_kwargs,
+        )
+
+    def test_change_password_sends_notification_email(self):
+        self.alice.email = 'alice@example.com'
+        self.alice.save(update_fields=['email'])
+        resp = self._change_password(
+            self.alice, 'pw-12345678', 'pw-new-strong-456',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(mail.outbox), 1)
+        message = mail.outbox[0]
+        self.assertEqual(message.to, ['alice@example.com'])
+        self.assertEqual(message.subject,
+                         'تغییرِ رمزِ عبور — برنامه‌ریزِ هوشمندِ مطالعه')
+        self.assertIn('سلام alice،', message.body)
+        self.assertIn('نشانیِ فرستنده: 127.0.0.1', message.body)
+        self.assertIn('همه‌ی نشست‌هایِ دیگر باطل شدند', message.body)
+        self.assertIn('اگر شما این تغییر را نکرده‌اید', message.body)
+
+    def test_reset_confirm_sends_notification_email(self):
+        self.alice.email = 'alice@example.com'
+        self.alice.save(update_fields=['email'])
+        self.client.post(_RESET_URL, {'identifier': 'alice'}, format='json')
+        uid, token = _make_reset_link(self.alice)
+        resp = self.client.post(
+            _RESET_CONFIRM_URL,
+            {'uid': uid, 'token': token,
+             'new_password': 'pw-new-strong-456'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        # دو ایمیل: لینکِ بازیابی + اطلاع‌رسانیِ امنیتیِ بازنشانی:
+        self.assertEqual(len(mail.outbox), 2)
+        notification = mail.outbox[1]
+        self.assertEqual(notification.subject,
+                         'بازنشانیِ رمزِ عبور — برنامه‌ریزِ هوشمندِ مطالعه')
+        self.assertIn('با لینکِ بازیابی بازنشانی شد', notification.body)
+        self.assertIn('همه‌ی نشست‌هایِ قبلی باطل شدند', notification.body)
+        self.assertIn('اگر شما این کار را نکرده‌اید', notification.body)
+
+    def test_no_email_without_registered_address(self):
+        """باب (بدونِ ایمیل) → تغییرِ رمز موفق ولی صندوقِ خالی — رویداد
+        همچنان ثبت می‌شود (لاگ مستقل از ایمیل است)."""
+        resp = self._change_password(
+            self.bob, 'pw-12345678', 'pw-new-strong-456',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(mail.outbox), 0)
+        self.assertEqual(
+            SecurityEvent.objects.filter(user=self.bob).count(), 1,
+        )
+
+    def test_login_events_never_send_email(self):
+        """ورود/تلاشِ ورود ایمیل نمی‌فرستد — سروصدا و ابزارِ بمبارانِ
+        صندوق با لاگین‌هایِ ناموفق است (تصمیمِ طراحیِ _send_password_notification)."""
+        self.alice.email = 'alice@example.com'
+        self.alice.save(update_fields=['email'])
+        self.client.post(
+            '/api/auth/login/',
+            {'username': 'alice', 'password': 'wrong'},
+            format='json',
+        )
+        self.client.post(
+            '/api/auth/login/',
+            {'username': 'alice', 'password': 'pw-12345678'},
+            format='json',
+        )
+        self.assertEqual(len(mail.outbox), 0)
+        self.assertEqual(
+            SecurityEvent.objects.filter(user=self.alice).count(), 2,
+        )
+
+    def test_smtp_failure_does_not_break_password_change(self):
+        """شکستِ SMTP در اطلاع‌رسانی → خودِ تغییرِ رمز هنوز ۲۰۰ و رویداد
+        ثبت‌شده (اطلاع‌رسانی «لطفاً» مسیرِ اصلی را خراب نمی‌کند)."""
+        self.alice.email = 'alice@example.com'
+        self.alice.save(update_fields=['email'])
+        with patch('planner.views.send_mail',
+                   side_effect=ConnectionError('SMTP down')):
+            resp = self._change_password(
+                self.alice, 'pw-12345678', 'pw-new-strong-456',
+            )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertIn('access', resp.json())
+        self.assertEqual(
+            SecurityEvent.objects.filter(user=self.alice).count(), 1,
+        )
+
+    def test_notification_email_translated_to_english(self):
+        self.alice.email = 'alice@example.com'
+        self.alice.save(update_fields=['email'])
+        resp = self._change_password(
+            self.alice, 'pw-12345678', 'pw-new-strong-456',
+            HTTP_ACCEPT_LANGUAGE='en',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        message = mail.outbox[0]
+        self.assertEqual(message.subject,
+                         'Password changed — Smart Study Planner')
+        self.assertIn('Hello alice,', message.body)
+        self.assertIn('Originating address: 127.0.0.1', message.body)
+        self.assertIn('If this was not you', message.body)
+
+
+@override_settings(**_LOCMEM)
+class SecurityAuditAntiEnumerationTests(BaseAPITestCase):
+    """رگرسیونِ ضدِ کشفِ حساب: ضبطِ رویدادِ داخلی نباید «پاسخِ» مسیرهایِ
+    بی‌لاگین را تغییر دهد — قراردادِ بایت‌به‌بایتِ Task 30 دست‌نخورده."""
+
+    def test_reset_request_responses_identical_with_event_recording(self):
+        """موجود (رویداد ثبت می‌شود) و ناموجود (ثبت نمی‌شود) → همان status،
+        همان بدنه — فقط لاگِ داخلی فرق دارد."""
+        resp_known = self.client.post(
+            _RESET_URL, {'identifier': 'alice'}, format='json',
+        )
+        resp_unknown = self.client.post(
+            _RESET_URL, {'identifier': 'ghost'}, format='json',
+        )
+        self.assertEqual(resp_known.status_code, resp_unknown.status_code)
+        self.assertEqual(resp_known.json(), resp_unknown.json())
+        # فرقِ دنیایِ واقعی فقط داخلی است: یک رویداد برایِ آلیس، هیچ برایِ روح:
+        self.assertEqual(
+            SecurityEvent.objects.filter(
+                user=self.alice,
+                event_type=SecurityEvent.EventType.PASSWORD_RESET_REQUESTED,
+            ).count(), 1,
+        )
+        self.assertEqual(SecurityEvent.objects.count(), 1)

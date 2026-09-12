@@ -161,3 +161,63 @@ msgstr "Saturday"
 
 msgid "یکشنبه"
 msgstr "Sunday"
+
+# --- لاگِ رویدادهایِ امنیتی (models.py — SecurityEvent.EventType labels) ---
+msgid "ورود موفق"
+msgstr "Successful sign-in"
+
+msgid "تلاشِ ناموفقِ ورود"
+msgstr "Failed sign-in attempt"
+
+msgid "تغییر رمز عبور"
+msgstr "Password changed"
+
+msgid "درخواستِ بازیابیِ رمزِ عبور"
+msgstr "Password reset requested"
+
+msgid "بازنشانیِ رمزِ عبور"
+msgstr "Password reset completed"
+
+# --- اطلاع‌رسانیِ ایمیلیِ امنیتی (views.py — _send_password_notification) ---
+msgid "تغییرِ رمزِ عبور — برنامه‌ریزِ هوشمندِ مطالعه"
+msgstr "Password changed — Smart Study Planner"
+
+msgid "بازنشانیِ رمزِ عبور — برنامه‌ریزِ هوشمندِ مطالعه"
+msgstr "Password reset — Smart Study Planner"
+
+msgid ""
+"سلام %(username)s،\n"
+"\n"
+"رمزِ عبورِ حسابِ شما تغییر کرد و همه‌ی نشست‌هایِ دیگر باطل شدند.\n"
+"نشانیِ فرستنده: %(ip)s\n"
+"\n"
+"اگر این تغییر را شما انجام داده‌اید، نیازی به هیچ کاری نیست.\n"
+"اگر شما این تغییر را نکرده‌اید، همین حالا از صفحه‌ی ورود با «رمز را فراموش کرده‌اید؟» رمز را بازنشانی کنید."
+msgstr ""
+"Hello %(username)s,\n"
+"\n"
+"Your account password was changed and all your other sessions were revoked.\n"
+"Originating address: %(ip)s\n"
+"\n"
+"If you made this change yourself, no action is needed.\n"
+"If this was not you, reset your password right now from the login page using \"Forgot your password?\"."
+
+msgid ""
+"سلام %(username)s،\n"
+"\n"
+"رمزِ عبورِ حسابِ شما با لینکِ بازیابی بازنشانی شد و همه‌ی نشست‌هایِ قبلی باطل شدند.\n"
+"نشانیِ فرستنده: %(ip)s\n"
+"\n"
+"اگر این کار را شما کرده‌اید، با رمزِ جدید وارد شوید.\n"
+"اگر شما این کار را نکرده‌اید، همین حالا از صفحه‌ی ورود با «رمز را فراموش کرده‌اید؟» دوباره رمز را بازنشانی کنید."
+msgstr ""
+"Hello %(username)s,\n"
+"\n"
+"Your account password was reset using the recovery link and all previous sessions were revoked.\n"
+"Originating address: %(ip)s\n"
+"\n"
+"If this was you, sign in with your new password.\n"
+"If this was not you, reset your password again right now from the login page using \"Forgot your password?\"."
+
+msgid "نامشخص"
+msgstr "Unknown"

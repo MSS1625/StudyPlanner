@@ -66,6 +66,11 @@ urlpatterns = [
     # خودِ توکنِ امضاشده است و throttle پیش‌فرضِ anon کافی است.
     path('auth/password/reset/', views.password_reset_request, name='password_reset_request'),
     path('auth/password/reset/confirm/', views.password_reset_confirm, name='password_reset_confirm'),
+    # تاریخچه‌ی رویدادهایِ امنیتی (از 2026-09-12): GET /api/auth/security/events/
+    # — فقط با توکنِ خودِ کاربر؛ رویدادهایِ ضبط‌شده در login/تغییرِ رمز/بازیابی
+    # (نوع + زمان + IP + User-Agent) با برچسبِ ترجمه‌شده با Accept-Language.
+    # پارامترِ اختیاریِ ?limit=N (۱..۲۰۰؛ پیش‌فرض ۵۰)؛ جزئیات: views.security_events.
+    path('auth/security/events/', views.security_events, name='security_events'),
     path('dashboard/', views.dashboard, name='dashboard'),
     # پیش‌بینیِ هوشمند (از 2026-09-09): GET /api/predictions/ — مؤلفه‌ی
     # یادگیریِ آماری (کالیبراسیونِ تخمین‌هایِ ساعتیِ کاربر رویِ تاریخچه‌ی

@@ -23,7 +23,7 @@ from django.contrib.auth.password_validation import validate_password
 # (با .detail) نامِ همسانِ ولی ساختارِ متفاوت دارد — با نامِ مستعارِ جدا ایمپورت
 # می‌شود تا در handler صریحاً تبدیل شود.
 from django.core.exceptions import ValidationError as DjangoValidationError
-from .models import Subject, Exam, StudyPlan, StudyLog
+from .models import Subject, Exam, StudyPlan, StudyLog, SecurityEvent
 # تابع کمکی که درصد پیشرفتِ یک درس را حساب می‌کند (تعریف‌شده در utils.py)
 from .utils import compute_subject_progress
 # gettext_lazy (از 2026-09-09): پیام‌هایِ اعتبارسنجی هم با زبانِ درخواست ترجمه می‌شوند.
@@ -189,3 +189,42 @@ class StudyLogSerializer(serializers.ModelSerializer):
     class Meta:
         model = StudyLog
         fields = ['id', 'user', 'exam', 'exam_name', 'date', 'hours_studied', 'notes']
+
+
+class SecurityEventSerializer(serializers.ModelSerializer):
+    """سریالایزرِ رویدادهایِ امنیتیِ کاربر (از 2026-09-12) — GET /api/auth/security/events/.
+
+    شکلِ هر آیتم (فقط خواندنی — نوشتنِ رویداد فقط از طریقِ SecurityEvent.record
+    در ویوها انجام می‌شود):
+        {
+          "type":  "login_failed",            ← کلیدِ ماشین‌خوانِ ثابت (کلاینت
+                                                   رندر/فیلتر را روی این می‌سازد)
+          "label": "تلاشِ ناموفقِ ورود",      ← برچسبِ قابل‌ترجمه با زبانِ درخواست
+                                                   (Accept-Language — gettext_lazy
+                                                   در EventType)
+          "created_at": "2026-09-12T...",    ← ISO 8601 (locale در فرانت‌اند)
+          "ip": "127.0.0.1" | null,          ← نشانی‌ای که throttle هم می‌شمارد
+          "user_agent": "Mozilla/5.0 ..."   ← بریده‌شده به ۳۰۰ نویسه
+        }
+
+    چرا هم type و هم label؟ کلیدِ ثابت برای پایداریِ کلاینت (رنگ/آیکن/فیلتر) و
+    برچسبِ ترجمه‌شده برای نمایشِ مستقیم — الگویِ «رشته‌های ماشین‌خوانِ predictions +
+    ترجمه در فرانت‌اند» این‌جا ترکیبی است: label از بک‌اند می‌آید چون کاتالوگِ
+    gettextِ بک‌اند منبعِ حقیقتِ ترجمه‌ی پیام‌هاست (همان پیام‌هایِ API).
+    """
+
+    # کلیدِ ماشین‌خوانِ نوعِ رویداد — نامِ فیلدِ API عمداً کوتاه است (type).
+    type = serializers.CharField(source='event_type', read_only=True)
+    # برچسبِ قابل‌ترجمه — get_event_type_display برچسبِ gettext_lazyِ TextChoices
+    # را برمی‌گرداند که با زبانِ فعالِ درخواست ترجمه می‌شود؛ str() همان لحظه آن را
+    # قطعی می‌کند (DRF خودش هم lazy را رندر می‌کند — صراحت بهتر است).
+    label = serializers.SerializerMethodField()
+    # نامِ فیلدِ API کوتاه (ip) ولی منبعِ مدل ip_address است.
+    ip = serializers.CharField(source='ip_address', read_only=True)
+
+    class Meta:
+        model = SecurityEvent
+        fields = ['type', 'label', 'created_at', 'ip', 'user_agent']
+
+    def get_label(self, obj):
+        return str(obj.get_event_type_display())

@@ -18,6 +18,9 @@ from django.contrib.auth.models import User
 from django.core.validators import MinValueValidator, MaxValueValidator
 # برای گرفتن تاریخ/زمان جاری (به‌عنوان مقدار پیش‌فرض فیلد تاریخ)
 from django.utils import timezone
+# برچسب‌های نوعِ رویدادِ امنیتی تا زمانِ رندر ترجمه‌نشده می‌مانند و با
+# زبانِ درخواست (Accept-Language) ترجمه می‌شوند (همان الگوی WEEKDAY_FA).
+from django.utils.translation import gettext_lazy
 
 
 class Subject(models.Model):
@@ -365,3 +368,144 @@ class UserSecurityProfile(models.Model):
 
     def __str__(self):
         return f"{self.user.username} - password changed at {self.password_changed_at:%Y-%m-%d %H:%M}"
+
+
+# ----------------------------------------------------------------------------
+# لاگِ رویدادهایِ امنیتی (از 2026-09-12)
+# ----------------------------------------------------------------------------
+
+class SecurityEvent(models.Model):
+    """
+    یک «رویدادِ امنیتی» در تاریخچه‌ی حسابِ کاربر — چیزی که کاربر خودش بعداً
+    می‌تواند ببیند: ورودِ موفق، تلاشِ ناموفقِ ورود، تغییرِ رمز، درخواستِ
+    بازیابی و بازنشانیِ رمز. (ایده‌ی ثبت‌شده در TODO.md — «لاگِ رویدادهایِ
+    امنیتی / audit log».)
+
+    نکته‌های طراحی:
+
+    - این لاگ «خصوصی» است، نه عمومی: تنها مسیرِ خواندنش GET /api/auth/
+      security/events/ است که فقط با توکنِ خودِ کاربر جواب می‌دهد (جداسازی
+      کامل مثل درس/امتحان/گزارش). داده‌اش هم داخلی است — ضبطِ رویداد
+      هیچ اثری در «پاسخِ» مسیرهای بی‌لاگین نمی‌گذارد (قراردادِ ضدِ کشفِ
+      حسابِ بازیابیِ رمز دست‌نخورده می‌ماند).
+    - IPِ ثبت‌شده همان «هویتی» است که محدودسازِ نرخ (throttles.py) شمرده
+      می‌شود (AuthBurstThrottle().get_ident) — یعنی لاگ و throttle همیشه
+      یک تعریف از «این درخواست از کجا آمد» دارند.
+    - نگه‌داریِ محدود (RETENTION_LIMIT): هر ثبت، رویدادهای قدیمی‌تر از
+      سقفِ هر کاربر را همان‌جا هرس می‌کند — جدولِ لاگ هرگز بی‌سقف رشد
+      نمی‌کند و نیازی به jobِ زمان‌بندی‌شده‌ی جدا ندارد.
+    - حذفِ کاربر → حذفِ رویدادهایش هم (CASCADE) — منطقی است چون تاریخچه‌ی
+      امنیتیِ کاربرِ حذف‌شده دیگر مخاطبی ندارد.
+    """
+
+    class EventType(models.TextChoices):
+        """پنج نوعِ رویداد — مقدار = کلیدِ ماشین‌خوانِ ثابت در API؛ برچسب =
+        متنِ قابل‌ترجمه (gettext_lazy) برای نمایش (serializer آن را با
+        get_event_type_display و زبانِ درخواست برمی‌گرداند)."""
+        LOGIN_SUCCESS = 'login_success', gettext_lazy('ورود موفق')
+        LOGIN_FAILED = 'login_failed', gettext_lazy('تلاشِ ناموفقِ ورود')
+        PASSWORD_CHANGED = 'password_changed', gettext_lazy('تغییر رمز عبور')
+        PASSWORD_RESET_REQUESTED = (
+            'password_reset_requested',
+            gettext_lazy('درخواستِ بازیابیِ رمزِ عبور'),
+        )
+        PASSWORD_RESET_COMPLETED = (
+            'password_reset_completed',
+            gettext_lazy('بازنشانیِ رمزِ عبور'),
+        )
+
+    # سقفِ نگه‌داریِ رویدادها به‌ازایِ هر کاربر — عددِ ثابتِ کلاس (نه متغیرِ
+    # محیطی) چون رفتارِ امنیتی است نه تنظیمِ استقرار؛ تست‌ها برای سناریویِ
+    # هرس موقتاً همین عدد را کوچک می‌کنند (patch.object).
+    RETENTION_LIMIT = 200
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='security_events',
+        # db_index پیش‌فرضِ ForeignKey است؛ Meta.indexes نمایِ ترکیبیِ «کاربر +
+        # زمان» را برای پرس‌وجویِ اصلی (تازه‌ترینِ رویدادهایِ این کاربر)
+        # اضافه می‌کند — تنها الگویِ خواندنِ این جدول.
+    )
+
+    # نوعِ رویداد (کلیدِ ماشین‌خوان — ثابت در API؛ کلاینت هیچ‌وقت متنِ فارسیِ
+    # داخلی را نمی‌بیند بلکه labelِ ترجمه‌شده را می‌گیرد).
+    event_type = models.CharField(max_length=40, choices=EventType.choices)
+
+    # لحظه‌ی ثبت (auto_now_add — فقط یک‌بار)؛ ترتیبِ نمایش و مرجعِ هرس است.
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    # نشانیِ IP فرستنده‌ی درخواست — همان هویتی که throttle می‌شمارد؛ ممکن است
+    # None باشد (فراخوانیِ بدونِ request، مثل برخی تست‌ها).
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+
+    # عاملِ کاربر (User-Agent) — بریده به ۳۰۰ نویسه تا رکوردهایِ حجیم در
+    # جدول نمی‌نشینند (UAهایِ واقعی طولانی‌اند ولی سرِنوشتشان همین
+    # بریدگیِ صادقانه است).
+    user_agent = models.CharField(max_length=300, blank=True, default='')
+
+    class Meta:
+        # تازه‌ترین رویداد اول؛ -id برای قطعیتِ ترتیبِ رویدادهایِ هم‌ثانیه
+        # (auto_now_add رزولوشنِ میکروثانیه دارد ولی هرس و صفحه‌بندی باید
+        # حتی در فرضِ بدترین حالت (هم‌میکروثانیه) پایدار بمانند).
+        ordering = ['-created_at', '-id']
+        indexes = [
+            models.Index(fields=['user', '-created_at'], name='sec_event_user_idx'),
+        ]
+
+    def __str__(self):
+        return f"{self.user.username} - {self.event_type} at {self.created_at:%Y-%m-%d %H:%M}"
+
+    # ---------------------------------------------------------------------
+    # ضبطِ اتمیک + هرس
+    # ---------------------------------------------------------------------
+
+    @classmethod
+    def record(cls, *, user, event_type, request=None):
+        """یک رویداد را «اتمیک» ثبت و رویدادهای فراتر از سقف را هرس می‌کند.
+
+        تنها نقطه‌ی ورودِ نوشتن به این جدول است — همه‌ی پنج‌ نقطه‌ی ضبط
+        (login موفق/ناموفق، تغییر رمز، درخواست/تأییدِ بازیابی) از همین یک
+        متد می‌گذرند تا رفتار (IP/UA/هرس/ترتیب) همه‌جا یکسان بماند.
+
+        - تراکنش: ثبت + هرس یا هر دو یا هیچ — اگر فراخواننده خودش داخلِ
+          transaction.atomic() باشد، این تراکنش به savepoint تبدیل می‌شود
+          (رفتارِ استانداردِ جنگو؛ تغییری لازم نیست).
+        - idempotence نیست (هر فراخوانی = یک رویداد — لاگِ تکراری با معنا
+          است: دو ورودِ موفقِ پشت‌سرِهم دو رویدادند)؛ ولی بی‌خطر است چون
+          هرس سقفِ رشد را نگه می‌دارد.
+        """
+        # هویتِ شبکه‌ای و عاملِ کاربر از خودِ درخواست — مستقیم از DRF (همان
+        # منطقِ throttle؛ پشتِ پروکسیِ Nginx = X-Forwarded-For، وگرنه
+        # REMOTE_ADDR). request ممکن است نباشد (فراخوانیِ برنامه‌ای).
+        ip_address = None
+        user_agent = ''
+        if request is not None:
+            # import داخلی تا وابستگیِ مدل → throttle در زمانِ import برقرار
+            # نشود (throttles.py ماژولِ لایه‌ی API است؛ این‌جا فقط یک متدِ
+            # کمکیِ دیده‌بانی‌شده را قرض می‌گیریم).
+            from .throttles import AuthBurstThrottle
+            ident = AuthBurstThrottle().get_ident(request)
+            ip_address = ident or None
+            user_agent = (request.META.get('HTTP_USER_AGENT') or '')[:300]
+
+        with transaction.atomic():
+            event = cls.objects.create(
+                user=user,
+                event_type=event_type,
+                ip_address=ip_address,
+                user_agent=user_agent,
+            )
+            # هرسِ همان‌جا: تازه‌ترینِ RETENTION_LIMIT رویدادِ این کاربر
+            # می‌مانند و بقیه حذف می‌شوند. orderingِ Meta (-created_at, -id)
+            # مرتب‌سازی را تضمین می‌کند؛ values_list بدونِ کشِ مدل = سبک.
+            # وقتی شمارِ رویدادها <= سقف است، exclude هیچ‌چیز نمی‌گیرد و این
+            # پرس‌وجو عملاً یک شمارشِ ارزان است.
+            keep_ids = list(
+                cls.objects.filter(user=user).values_list('pk', flat=True)[
+                    : cls.RETENTION_LIMIT
+                ]
+            )
+            cls.objects.filter(user=user).exclude(pk__in=keep_ids).delete()
+
+        return event

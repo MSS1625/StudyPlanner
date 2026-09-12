@@ -44,6 +44,10 @@ const endpoints = {
     // پیش‌بینیِ هوشمند (از 2026-09-09): مؤلفه‌ی یادگیریِ آماری — مدلِ
     // کالیبراسیون + ساعتِ واقعیِ پیش‌بینی‌شده برایِ امتحان‌هایِ آینده
     predictions: '/api/predictions/',
+    // رویدادهایِ امنیتی (از 2026-09-12): تاریخچه‌ی ورودها/تغییرِ رمز/
+    // بازیابی — فقط خواندنی، با توکنِ خودِ کاربر؛ برچسب‌ها از بک‌اند با
+    // زبانِ درخواست (Accept-Language) ترجمه‌شده می‌آیند.
+    securityEvents: '/api/auth/security/events/',
     studyLogs: '/api/study-logs/',
     studyLogDetail: (id) => `/api/study-logs/${id}/`,
 };
@@ -57,6 +61,8 @@ const selectors = {
     logoutButton: '#logoutButton',
     changePasswordButton: '#changePasswordButton',
     changePasswordModal: '#changePasswordModal',
+    securityEventsButton: '#securityEventsButton',
+    securityEventsModal: '#securityEventsModal',
     passwordResetModal: '#passwordResetModal',
     forgotPasswordLink: '#forgotPasswordLink',
     sidebarToggle: '#sidebarToggle',
@@ -574,6 +580,8 @@ document.addEventListener('keydown', (event) => {
     if (overlay && !overlay.hidden) closeChangePasswordModal();
     const resetOverlay = document.querySelector(selectors.passwordResetModal);
     if (resetOverlay && !resetOverlay.hidden) closePasswordResetModal();
+    const securityOverlay = document.querySelector(selectors.securityEventsModal);
+    if (securityOverlay && !securityOverlay.hidden) closeSecurityEventsModal();
 });
 
 // ---------------------------------------------------------------------
@@ -800,6 +808,197 @@ const handlePasswordReset = () => {
     });
 };
 
+// ---------------------------------------------------------------------
+// فعالیت‌هایِ امنیتی (از 2026-09-12) — مودالِ «تاریخچه‌ی رویدادهایِ حساب»:
+// ورودهایِ موفق/ناموفق، تغییرِ رمز و بازیابی — با زمان، IP و مرورگر؛
+// داده از GET /api/auth/security/events/ و برچسبِ هر رویداد از بک‌اند
+// (ترجمه با همان Accept-Languageِ درخواست — رشته‌یِ خودِ t() این‌جا نیست).
+// ---------------------------------------------------------------------
+
+// مودال را در لحظه‌یِ باز‌شدن می‌سازد (الگویِ pw- موجود؛ فقط کلاس‌هایِ
+// موجود — بدونِ CSS جدید). لیست با کلاس‌هایِ timeline/timeline-item رندر
+// می‌شود (همان استایلِ داشبورد).
+const buildSecurityEventsModal = () => {
+    const overlay = document.createElement('div');
+    overlay.id = 'securityEventsModal';
+    overlay.className = 'pw-modal-overlay';
+    overlay.hidden = true;
+
+    const modal = document.createElement('div');
+    modal.className = 'pw-modal';
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-labelledby', 'secModalTitle');
+
+    const title = document.createElement('h3');
+    title.id = 'secModalTitle';
+    title.textContent = t('رویدادهای امنیتی');
+
+    const hint = document.createElement('p');
+    hint.className = 'field-hint';
+    hint.textContent = t('آخرین فعالیت‌های امنیتیِ حسابِ شما');
+
+    // ظرفِ لیست — سقفِ ارتفاع + پیمایش با استایلِ درون‌خطی (کلاسِ آماده‌ای
+    // برایِ پیمایش در مودال وجود ندارد و CSS جدید هم نمی‌خواهیم):
+    const list = document.createElement('div');
+    list.id = 'secEventsList';
+    list.className = 'timeline';
+    list.style.maxHeight = '320px';
+    list.style.overflowY = 'auto';
+
+    // خطای درونِ خودِ پنجره (به‌جای Toast که زیرِ پوششِ نیمه‌شفاف می‌مانَد):
+    const errorBox = document.createElement('p');
+    errorBox.id = 'secError';
+    errorBox.className = 'pw-error';
+    errorBox.hidden = true;
+    errorBox.setAttribute('role', 'alert');
+
+    const actions = document.createElement('div');
+    actions.className = 'pw-modal-actions';
+    const closeButton = document.createElement('button');
+    closeButton.type = 'button';
+    closeButton.className = 'primary-button';
+    closeButton.id = 'secClose';
+    closeButton.textContent = t('بستن');
+    closeButton.addEventListener('click', closeSecurityEventsModal);
+    actions.appendChild(closeButton);
+
+    modal.appendChild(title);
+    modal.appendChild(hint);
+    modal.appendChild(list);
+    modal.appendChild(errorBox);
+    modal.appendChild(actions);
+    overlay.appendChild(modal);
+    // کلیک روی پس‌زمینه‌یِ نیمه‌شفاف = بستن (کلیک داخلِ خودِ مودال نبسته می‌شود)
+    overlay.addEventListener('click', (event) => {
+        if (event.target === overlay) closeSecurityEventsModal();
+    });
+    document.body.appendChild(overlay);
+    return overlay;
+};
+
+const setSecError = (message) => {
+    const errorBox = document.querySelector('#secError');
+    if (!errorBox) return;
+    errorBox.textContent = message;
+    errorBox.hidden = false;
+};
+
+const clearSecError = () => {
+    const errorBox = document.querySelector('#secError');
+    if (!errorBox) return;
+    errorBox.textContent = '';
+    errorBox.hidden = true;
+};
+
+// قالبِ‌بندیِ زمان با تقویم/زبانِ کاربر (fa-IR = تقویمِ جلالی؛ en = میلادی) —
+// created_at از سرور ISO 8601 می‌آید و Date آن را درست می‌فهمد.
+const formatEventTime = (iso) => {
+    try {
+        return new Date(iso).toLocaleString(
+            currentLang() === 'en' ? 'en-US' : 'fa-IR',
+        );
+    } catch {
+        return iso; // مقدارِ خام به‌عنوانِ جایگزینِ مطمئن
+    }
+};
+
+// رندرِ لیست — همه‌یِ مقادیر با textContent (نه innerHTML): IP و User-Agent
+// داده‌یِ فرستنده‌ی درخواست‌اند و هرگز نباید به HTML تفسیر شوند (سیاستِ XSS).
+const renderSecurityEvents = (events) => {
+    const list = document.querySelector('#secEventsList');
+    if (!list) return;
+    list.replaceChildren();
+
+    if (!Array.isArray(events) || events.length === 0) {
+        const empty = document.createElement('p');
+        empty.className = 'field-hint';
+        empty.textContent = t('هنوز رویدادی ثبت نشده است.');
+        list.appendChild(empty);
+        return;
+    }
+
+    for (const event of events) {
+        const item = document.createElement('div');
+        item.className = 'timeline-item';
+
+        const label = document.createElement('strong');
+        label.textContent = event.label || event.type;
+
+        const meta = document.createElement('span');
+        meta.textContent = `${formatEventTime(event.created_at)} · ${
+            event.ip || t('ناشناس')
+        }`;
+
+        const agent = document.createElement('span');
+        agent.textContent = event.user_agent || t('ناشناس');
+
+        item.appendChild(label);
+        item.appendChild(meta);
+        item.appendChild(agent);
+        list.appendChild(item);
+    }
+};
+
+const openSecurityEventsModal = async () => {
+    const overlay =
+        document.querySelector(selectors.securityEventsModal) ||
+        buildSecurityEventsModal();
+    clearSecError();
+    overlay.hidden = false;
+
+    // حالتِ «در حالِ دریافت» تا پاسخِ سرور برسد (لیستِ خالی گیج‌کننده است):
+    renderSecurityEvents([]);
+    const list = document.querySelector('#secEventsList');
+    const loading = document.createElement('p');
+    loading.className = 'field-hint';
+    loading.textContent = t('در حالِ دریافتِ رویدادها...');
+    if (list) list.appendChild(loading);
+
+    try {
+        const events = await apiGet(endpoints.securityEvents);
+        renderSecurityEvents(events);
+    } catch (error) {
+        // ۴۰۱ خودش در apiRequest به صفحه‌یِ ورود هدایت می‌کند؛ خطاهایِ دیگر
+        // داخلِ خودِ پنجره می‌مانند (الگویِ مودالِ تغییرِ رمز):
+        renderSecurityEvents([]);
+        setSecError(error.message || t('خطا در دریافتِ رویدادها.'));
+    }
+};
+
+const closeSecurityEventsModal = () => {
+    const overlay = document.querySelector(selectors.securityEventsModal);
+    if (!overlay) return;
+    overlay.hidden = true;
+    // پاک‌سازیِ محتوا برایِ بارِ بعد (رویدادها هنگامِ باز‌شدنِ بعدی تازه
+    // خوانده می‌شوند — لاگ زنده است، نه کش):
+    const list = document.querySelector('#secEventsList');
+    if (list) list.replaceChildren();
+    clearSecError();
+};
+
+// دکمه‌یِ «فعالیت‌هایِ امنیتی» را در نوارِ مشترکِ صفحاتِ لاگین‌شده، قبل از
+// دکمه‌یِ «تغییر رمز عبور» (و اگر نبود، قبل ازِ خروج) تزریق می‌کند — مثلِ
+// همانِ الگویِ تزریقِ تغییرِ رمز؛ در صفحاتِ بی‌لاگین هیچ کاری نمی‌کند.
+const injectSecurityEventsButton = () => {
+    const anchor =
+        document.querySelector(selectors.changePasswordButton) ||
+        document.querySelector(selectors.logoutButton);
+    if (!anchor) return;
+    if (document.querySelector(selectors.securityEventsButton)) return;
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'ghost-button';
+    button.id = 'securityEventsButton';
+    button.textContent = t('فعالیت‌های امنیتی');
+    button.addEventListener('click', (event) => {
+        event.preventDefault();
+        openSecurityEventsModal();
+    });
+    anchor.parentNode.insertBefore(button, anchor);
+};
+
 // رویدادهایی که در همه‌ی صفحات مشترک‌اند (دکمه‌ی خروج، باز/بسته‌شدنِ سایدبارِ
 // موبایل با دکمه‌ی همبرگری و کلیک روی پس‌زمینه‌ی تیره) + به‌روزرسانیِ اولیه‌ی
 // نام کاربری و وضعیتِ اتصال. تقریباً هر initXPage این تابع را صدا می‌زند.
@@ -816,6 +1015,10 @@ const bindGlobalEvents = () => {
     // صفحاتِ لاگین‌شده، کنارِ دکمه‌ی خروج تزریق می‌شود (خودِ app.js می‌سازدش
     // — HTMLها تغییر نکرده‌اند).
     injectChangePasswordButton();
+
+    // دکمه‌ی «فعالیت‌های امنیتی» (از 2026-09-12): همان الگو، قبل از دکمه‌یِ
+    // تغییرِ رمز (ترتیبِ نوار: فعالیت‌ها ← تغییرِ رمز ← خروج).
+    injectSecurityEventsButton();
 
     const toggle = document.querySelector(selectors.sidebarToggle);
     const backdrop = document.querySelector(selectors.backdrop);
