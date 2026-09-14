@@ -42,7 +42,6 @@ import os
 import subprocess
 import sys
 import tempfile
-import time
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
@@ -2611,14 +2610,33 @@ class ThrottlingAPITests(BaseAPITestCase):
         self.assertIn('access', resp.json())
 
     def test_auth_throttle_window_expires(self):
-        """محدودیت موقتی است: با نرخِ '2/sec'، پس از گذرِ پنجره آزاد می‌شود."""
+        """محدودیت موقتی است: پس از گذرِ پنجره آزاد می‌شود (ساعتِ تقلبی).
+
+        نسخه‌ی قدیمی ('2/sec' + time.sleep واقعی) به سرعتِ ماشین وابسته بود:
+        اگر سه درخواستِ پشت‌سرِهم در همان «یک ثانیه‌ی» اول جا نشوند (ماشینِ
+        کند)، مهرِ زمانیِ درخواستِ اول از پنجره هرس می‌شود و سومی به‌جایِ ۴۲۹
+        همان ۴۰۱ می‌گیرد — بازتولیدشده با تأخیرِ ساختگیِ ۰.۶ثانیه‌ای. حالا:
+        نرخ '2/min' (پنجره‌ی ۶۰ثانیه‌ای؛ TTL کشِ ۶۰ثانیه‌ای هم در زمانِ واقعیِ
+        چند‌میلی‌ثانیه‌ایِ تست منقضی نمی‌شود) + جابه‌جاییِ «ساعتِ» DRF با
+        گام‌هایِ ساختگی؛ سناریو همان است: پرشدن → بسته‌شدن → گذرِ پنجره →
+        آزادشدن — بدونِ هیچ sleep واقعی.
+        نکته‌ی «کجا patch کنیم»: DRF ساعت را از SimpleRateThrottle.timer
+        می‌گیرد که هنگامِ import به time.time بایند شده است؛ پس باید خودِ
+        ویژگیِ timer را جایگزین کنیم — patch کردنِ ماژولِ time بعد ازِ import
+        روی آن مرجعِ ازپیش‌بسته اثری ندارد.
+        """
+        clock = {'now': 1000.0}
+
         with patch.object(SimpleRateThrottle, 'THROTTLE_RATES',
-                          {'anon': '10000/min', 'user': '10000/min', 'auth': '2/sec'}):
-            self.assertEqual(self._ghost_login().status_code, 401)
-            self.assertEqual(self._ghost_login().status_code, 401)
-            self.assertEqual(self._ghost_login().status_code, 429)
-            time.sleep(1.3)                     # پنجره‌ی ۱ ثانیه‌ای بگذرد
-            self.assertEqual(self._ghost_login().status_code, 401)
+                          {'anon': '10000/min', 'user': '10000/min', 'auth': '2/min'}), \
+             patch.object(SimpleRateThrottle, 'timer', lambda self: clock['now']):
+            self.assertEqual(self._ghost_login().status_code, 401)   # t=1000
+            clock['now'] = 1030.0                                     # هنوز داخلِ پنجره
+            self.assertEqual(self._ghost_login().status_code, 401)   # t=1030
+            clock['now'] = 1045.0
+            self.assertEqual(self._ghost_login().status_code, 429)   # دو مهرِ زنده در ۶۰ث → بسته
+            clock['now'] = 1061.0                                     # مهرِ t=1000 هرس شد
+            self.assertEqual(self._ghost_login().status_code, 401)   # پنجره آزاد
 
 
 class ThrottleDevSafeDefaultsTests(BaseAPITestCase):
