@@ -221,3 +221,90 @@ msgstr ""
 
 msgid "نامشخص"
 msgstr "Unknown"
+# --- ورودِ دومرحله‌ای (Task 32، از 2026-09-14 — views.py / models.py) ---
+
+msgid "فعال‌سازیِ ورودِ دومرحله‌ای — برنامه‌ریزِ هوشمندِ مطالعه"
+msgstr "Two-factor sign-in enabled — Smart Study Planner"
+
+msgid "خاموش‌شدنِ ورودِ دومرحله‌ای — برنامه‌ریزِ هوشمندِ مطالعه"
+msgstr "Two-factor sign-in disabled — Smart Study Planner"
+
+msgid ""
+"سلام %(username)s،\n"
+"\n"
+"ورودِ دومرحله‌ای برایِ حسابِ شما فعال شد. از این پس ورود علاوه بر رمزِ عبور، کدِ یک‌بارمصرفِ اپلیکیشنِ احرازگرِ شما را هم می‌خواهد.\n"
+"نشانیِ فرستنده: %(ip)s\n"
+"\n"
+"اگر این فعال‌سازی را شما انجام داده‌اید، نیازی به هیچ کاری نیست.\n"
+"اگر شما این کار را نکرده‌اید، همین حالا از صفحه‌ی ورود با «رمز را فراموش کرده‌اید؟» رمز را بازنشانی کنید؛ بازنشانیِ رمز، ورودِ دومرحله‌ای را هم خاموش می‌کند."
+msgstr ""
+"Hello %(username)s,\n"
+"\n"
+"Two-factor sign-in was enabled for your account. From now on, signing in requires the one-time code from your authenticator app in addition to your password.\n"
+"Originating address: %(ip)s\n"
+"\n"
+"If you enabled this yourself, no action is needed.\n"
+"If this was not you, reset your password right now from the login page using \"Forgot your password?\" — resetting the password also turns two-factor sign-in off."
+
+msgid ""
+"سلام %(username)s،\n"
+"\n"
+"ورودِ دومرحله‌ایِ حسابِ شما خاموش شد؛ از این پس ورود فقط با رمزِ عبور انجام می‌شود.\n"
+"نشانیِ فرستنده: %(ip)s\n"
+"\n"
+"اگر این خاموش‌شدن را شما انجام داده‌اید، نیازی به هیچ کاری نیست.\n"
+"اگر شما این کار را نکرده‌اید، همین حالا از صفحه‌ی ورود با «رمز را فراموش کرده‌اید؟» رمز را بازنشانی کنید."
+msgstr ""
+"Hello %(username)s,\n"
+"\n"
+"Two-factor sign-in was turned off for your account; signing in now works with your password only.\n"
+"Originating address: %(ip)s\n"
+"\n"
+"If you turned this off yourself, no action is needed.\n"
+"If this was not you, reset your password right now from the login page using \"Forgot your password?\"."
+
+msgid ""
+"کلید ساخته شد؛ آن را در اپلیکیشنِ احرازگر ثبت کنید و کدِ فعلی را برایِ تأیید بفرستید."
+msgstr ""
+"Key created; register it in your authenticator app and send its current code to confirm."
+
+msgid ""
+"ورودِ دومرحله‌ای فعال شد؛ از این پس ورود، کدِ اپلیکیشنِ احرازگر را هم می‌خواهد."
+msgstr ""
+"Two-factor sign-in enabled; signing in now also requires the code from your authenticator app."
+
+msgid "ورودِ دومرحله‌ای خاموش شد."
+msgstr "Two-factor sign-in disabled."
+
+msgid "ورودِ دومرحله‌ای از قبل فعال است؛ برایِ تعویضِ کلید اول آن را خاموش کنید."
+msgstr "Two-factor sign-in is already enabled; disable it before replacing the key."
+
+msgid "ورودِ دومرحله‌ای از قبل فعال است."
+msgstr "Two-factor sign-in is already enabled."
+
+msgid "ورودِ دومرحله‌ای فعال نیست."
+msgstr "Two-factor sign-in is not enabled."
+
+msgid "اول با setup یک کلید بسازید."
+msgstr "Create a key with setup first."
+
+msgid "کدِ نامعتبر است؛ کدِ تازه‌ی اپلیکیشن را وارد کنید."
+msgstr "Invalid code; enter the fresh code from your app."
+
+msgid "رمز عبور اشتباه است."
+msgstr "The password is incorrect."
+
+msgid "کد تأییدِ دومرحله‌ای را وارد کنید."
+msgstr "Enter your two-factor verification code."
+
+msgid "کد تأییدِ دومرحله‌ای نامعتبر یا منقضی است."
+msgstr "The two-factor code is invalid or expired."
+
+msgid "فعال‌سازیِ ورودِ دومرحله‌ای"
+msgstr "Two-factor sign-in enabled"
+
+msgid "خاموش‌شدنِ ورودِ دومرحله‌ای"
+msgstr "Two-factor sign-in disabled"
+
+msgid "کدِ نامعتبرِ ورودِ دومرحله‌ای"
+msgstr "Invalid two-factor code"

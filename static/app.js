@@ -48,6 +48,13 @@ const endpoints = {
     // بازیابی — فقط خواندنی، با توکنِ خودِ کاربر؛ برچسب‌ها از بک‌اند با
     // زبانِ درخواست (Accept-Language) ترجمه‌شده می‌آیند.
     securityEvents: '/api/auth/security/events/',
+    // ورودِ دومرحله‌ای (از 2026-09-14): وضعیت/ساختِ کلید/تأیید/خاموش‌کردن —
+    // همه با توکنِ خودِ کاربر؛ چالشِ کدِ ورود در همان login با پرچمِ
+    // requires_2fa انجام می‌شود (مسیرِ جدا لازم نیست).
+    twoFactorStatus: '/api/auth/2fa/',
+    twoFactorSetup: '/api/auth/2fa/setup/',
+    twoFactorConfirm: '/api/auth/2fa/confirm/',
+    twoFactorDisable: '/api/auth/2fa/disable/',
     studyLogs: '/api/study-logs/',
     studyLogDetail: (id) => `/api/study-logs/${id}/`,
 };
@@ -63,6 +70,8 @@ const selectors = {
     changePasswordModal: '#changePasswordModal',
     securityEventsButton: '#securityEventsButton',
     securityEventsModal: '#securityEventsModal',
+    twoFactorButton: '#twoFactorButton',
+    twoFactorModal: '#twoFactorModal',
     passwordResetModal: '#passwordResetModal',
     forgotPasswordLink: '#forgotPasswordLink',
     sidebarToggle: '#sidebarToggle',
@@ -170,6 +179,10 @@ const apiRequest = async (
             message = data.detail;
         } else if (data?.message) {
             message = data.message;
+        } else if (typeof data?.error === 'string') {
+            // شکلِ پاسخِ login (از اولِ پروژه): {"error": "..."} — از 2026-09-14
+            // مستقیم برداشته می‌شود تا توستِ «رمزِ غلط» JSONِ خام نشان ندهد.
+            message = data.error;
         } else if (typeof data === 'object' && Object.keys(data).length > 0) {
             // حالتِ رایج در DRF: خطای اعتبارسنجیِ هر فیلد جدا برگردانده می‌شود
             // (مثلاً {"username": ["این نام قبلاً ثبت شده"]})؛ اولین مورد را نشان می‌دهیم.
@@ -182,7 +195,14 @@ const apiRequest = async (
         }
         // با throw کردن یک خطا، توابعِ صدازننده (که این تابع را await کرده‌اند)
         // می‌توانند با try/catch خطا را بگیرند و به کاربر Toast نشان دهند.
-        throw new Error(message);
+        // از 2026-09-14: خطا «بدنه‌ی خامِ پاسخ» (error.data) و «کدِ وضعیت»
+        // (error.status) را هم یدک می‌کشد تا صفحاتِ خاص — مثلِ login —
+        // پرچم‌هایِ ماشینیِ مثلِ requires_2fa را ببینند؛ بقیه‌ی صدازننده‌ها فقط
+        // .message را می‌خوانند و رفتارشان ذره‌ای عوض نشده است.
+        const requestError = new Error(message);
+        requestError.status = response.status;
+        requestError.data = data;
+        throw requestError;
     }
 
     return data;
@@ -582,6 +602,8 @@ document.addEventListener('keydown', (event) => {
     if (resetOverlay && !resetOverlay.hidden) closePasswordResetModal();
     const securityOverlay = document.querySelector(selectors.securityEventsModal);
     if (securityOverlay && !securityOverlay.hidden) closeSecurityEventsModal();
+    const twoFactorOverlay = document.querySelector(selectors.twoFactorModal);
+    if (twoFactorOverlay && !twoFactorOverlay.hidden) closeTwoFactorModal();
 });
 
 // ---------------------------------------------------------------------
@@ -999,6 +1021,391 @@ const injectSecurityEventsButton = () => {
     anchor.parentNode.insertBefore(button, anchor);
 };
 
+// ---------------------------------------------------------------------
+// ورودِ دومرحله‌ای (از 2026-09-14) — مودالِ مدیریت از نوارِ مشترک
+// ---------------------------------------------------------------------
+
+// بارگذاریِ تنبلِ مولدِ QR (static/qrcode.js — کتابخانه‌ی MIT): فقط وقتی
+// واقعاً لازم می‌شود به صفحه اضافه می‌شود؛ اگر برقراری نشد، همان «کلیدِ
+// دستی + لینکِ otpauth» راهِ ثبت را کامل می‌کند (افتِ نرم، نه خطا).
+let qrLibPromise = null;
+const loadQrLib = () => {
+    if (typeof qrcode !== 'undefined') return Promise.resolve(true);
+    if (!qrLibPromise) {
+        qrLibPromise = new Promise((resolve) => {
+            const script = document.createElement('script');
+            script.src = 'qrcode.js';
+            script.onload = () => resolve(true);
+            script.onerror = () => resolve(false);
+            document.head.appendChild(script);
+        });
+    }
+    return qrLibPromise;
+};
+
+// data URL از نوع GIF برایِ <img> — یا null اگر کتابخانه در دسترس نبود.
+const buildQrDataUrl = async (text) => {
+    try {
+        if (!(await loadQrLib()) || typeof qrcode === 'undefined') return null;
+        const qr = qrcode(0, 'M'); // 0 = انتخابِ خودکارِ اندازه
+        qr.addData(text);
+        qr.make();
+        return qr.createDataURL(4, 2);
+    } catch {
+        return null;
+    }
+};
+
+// پیامِ برتر از ساختارهایِ خطای DRF ({detail} / {فیلد: [پیام]}) — بدونِ
+// پیشوندِ نامِ فیلد؛ فقط برایِ فرم‌هایِ مودالِ 2FA.
+const tfErrorMessage = (error) => {
+    const data = error && error.data;
+    if (data && typeof data === 'object') {
+        if (typeof data.detail === 'string') return data.detail;
+        for (const key of ['code', 'password']) {
+            if (Array.isArray(data[key]) && data[key].length) return data[key][0];
+        }
+    }
+    return (error && error.message) || t('خطایی رخ داده است.');
+};
+
+const buildTwoFactorModal = () => {
+    const overlay = document.createElement('div');
+    overlay.id = 'twoFactorModal';
+    overlay.className = 'pw-modal-overlay';
+    overlay.hidden = true;
+
+    const modal = document.createElement('div');
+    modal.className = 'pw-modal';
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-labelledby', 'tfModalTitle');
+
+    const title = document.createElement('h3');
+    title.id = 'tfModalTitle';
+    title.textContent = t('ورودِ دومرحله‌ای');
+
+    // بدنه‌ی حالت‌محور: محتوای آن با renderTwoFactorState بازسازی می‌شود
+    // (خاموش ← شروعِ فعال‌سازی ← تأیید / روشن ← خاموش‌کردن).
+    const body = document.createElement('div');
+    body.id = 'tfBody';
+    body.style.maxHeight = '420px';
+    body.style.overflowY = 'auto';
+
+    const closeButton = document.createElement('button');
+    closeButton.type = 'button';
+    closeButton.className = 'ghost-button';
+    closeButton.textContent = t('بستن');
+    closeButton.style.marginTop = '12px';
+    closeButton.addEventListener('click', closeTwoFactorModal);
+
+    modal.appendChild(title);
+    modal.appendChild(body);
+    modal.appendChild(closeButton);
+    overlay.appendChild(modal);
+    overlay.addEventListener('click', (event) => {
+        if (event.target === overlay) closeTwoFactorModal();
+    });
+    document.body.appendChild(overlay);
+    return overlay;
+};
+
+const tfSetBusy = (overlay, busy) => {
+    overlay.querySelectorAll('button').forEach((button) => {
+        button.disabled = busy;
+    });
+};
+
+const tfShowError = (overlay, message) => {
+    let errorBox = overlay.querySelector('#tfError');
+    if (!errorBox) {
+        errorBox = document.createElement('p');
+        errorBox.id = 'tfError';
+        errorBox.className = 'pw-error';
+        errorBox.setAttribute('role', 'alert');
+        const body = overlay.querySelector('#tfBody');
+        if (body) body.appendChild(errorBox);
+    }
+    errorBox.textContent = message;
+    errorBox.hidden = false;
+    tfSetBusy(overlay, false);
+};
+
+const tfClearError = (overlay) => {
+    const errorBox = overlay.querySelector('#tfError');
+    if (errorBox) errorBox.hidden = true;
+};
+
+// حالتِ «روشن»: نمایشِ وضعیت + فرمِ خاموش‌کردن با رمز و کدِ فعلی.
+const renderTwoFactorEnabled = (overlay) => {
+    const body = overlay.querySelector('#tfBody');
+    body.replaceChildren();
+
+    const statusLine = document.createElement('p');
+    statusLine.className = 'field-hint';
+    statusLine.textContent = t('ورودِ دومرحله‌ای فعال است ✅ — ورود علاوه بر رمزِ عبور، کدِ لحظه‌ایِ اپلیکیشنِ احرازگر را هم می‌خواهد.');
+    body.appendChild(statusLine);
+
+    const form = document.createElement('form');
+    form.className = 'pw-form';
+    form.noValidate = true;
+
+    const fields = [
+        { id: 'tfDisablePassword', label: t('رمز عبور'), type: 'password', autocomplete: 'current-password' },
+        { id: 'tfDisableCode', label: t('کد تأییدِ فعلیِ اپلیکیشن'), type: 'text', autocomplete: 'one-time-code' },
+    ];
+    for (const field of fields) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'form-field';
+        const label = document.createElement('label');
+        label.htmlFor = field.id;
+        label.textContent = field.label;
+        const input = document.createElement('input');
+        input.type = field.type;
+        input.id = field.id;
+        input.name = field.id;
+        input.autocomplete = field.autocomplete;
+        input.required = true;
+        if (field.type === 'text') {
+            input.inputMode = 'numeric';
+            input.pattern = '[0-9]*';
+            input.maxLength = 6;
+        }
+        wrapper.appendChild(label);
+        wrapper.appendChild(input);
+        form.appendChild(wrapper);
+    }
+
+    const submitButton = document.createElement('button');
+    submitButton.type = 'submit';
+    submitButton.className = 'primary-button';
+    submitButton.textContent = t('خاموش‌کردنِ ورودِ دومرحله‌ای');
+    form.appendChild(submitButton);
+
+    form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        tfClearError(overlay);
+        const password = form.querySelector('#tfDisablePassword').value;
+        const code = form.querySelector('#tfDisableCode').value.trim();
+        if (!password || !code) {
+            tfShowError(overlay, t('لطفاً همه فیلدها را کامل کنید.'));
+            return;
+        }
+        tfSetBusy(overlay, true);
+        try {
+            await apiPost(endpoints.twoFactorDisable, { password, code });
+            showToast(t('ورودِ دومرحله‌ای خاموش شد.'), 'success');
+            renderTwoFactorState(overlay, false);
+        } catch (error) {
+            tfShowError(overlay, tfErrorMessage(error));
+        }
+    });
+
+    body.appendChild(form);
+    const first = form.querySelector('#tfDisablePassword');
+    if (first) first.focus();
+};
+
+// حالتِ «خاموش» → دکمه‌ی شروعِ فعال‌سازی → نمایِ setup (QR + کلید + کد).
+const renderTwoFactorSetup = async (overlay) => {
+    const body = overlay.querySelector('#tfBody');
+    body.replaceChildren();
+
+    const loading = document.createElement('p');
+    loading.className = 'field-hint';
+    loading.textContent = t('در حالِ ساختِ کلید...');
+    body.appendChild(loading);
+
+    let data;
+    try {
+        data = await apiPost(endpoints.twoFactorSetup);
+    } catch (error) {
+        body.replaceChildren();
+        tfShowError(overlay, tfErrorMessage(error));
+        return;
+    }
+    body.replaceChildren();
+
+    // مرحله‌ی ۱ — ثبتِ کلید در اپلیکیشنِ احرازگر (QR یا دستی):
+    const stepOne = document.createElement('p');
+    stepOne.className = 'field-hint';
+    stepOne.textContent = t('مرحله‌ی ۱ — این کلید را در اپلیکیشنِ احرازگر (Google Authenticator و مشابه‌ها) ثبت کنید:');
+    body.appendChild(stepOne);
+
+    const qrDataUrl = await buildQrDataUrl(data.otpauth_uri);
+    if (qrDataUrl) {
+        const qrImg = document.createElement('img');
+        qrImg.id = 'tfQr';
+        qrImg.alt = t('بارکدِ ثبتِ کلید در اپلیکیشنِ احرازگر');
+        qrImg.src = qrDataUrl;
+        qrImg.width = 200;
+        qrImg.height = 200;
+        qrImg.style.display = 'block';
+        qrImg.style.margin = '0 auto 8px';
+        body.appendChild(qrImg);
+    } else {
+        const noQr = document.createElement('p');
+        noQr.className = 'field-hint';
+        noQr.textContent = t('بارکد در دسترس نیست — کلیدِ دستیِ زیر را در اپلیکیشن وارد کنید.');
+        body.appendChild(noQr);
+    }
+
+    // کلیدِ دستی: گروه‌بندیِ ۴نویسه‌ای برایِ خوانایی + راحت‌کپی‌بودن.
+    const secretBox = document.createElement('p');
+    secretBox.className = 'field-hint';
+    secretBox.style.fontFamily = 'monospace';
+    secretBox.style.fontSize = '15px';
+    secretBox.style.letterSpacing = '1px';
+    secretBox.style.userSelect = 'all';
+    secretBox.textContent = (data.secret || '').replace(/(.{4})/g, '$1 ').trim();
+    body.appendChild(secretBox);
+
+    const deepLink = document.createElement('a');
+    deepLink.href = data.otpauth_uri;
+    deepLink.textContent = t('بازکردن در اپلیکیشنِ احرازگر (موبایل)');
+    deepLink.style.display = 'block';
+    deepLink.style.marginBottom = '12px';
+    body.appendChild(deepLink);
+
+    // مرحله‌ی ۲ — تأیید با کدِ فعلی:
+    const stepTwo = document.createElement('p');
+    stepTwo.className = 'field-hint';
+    stepTwo.textContent = t('مرحله‌ی ۲ — کدِ ۶رقمیِ فعلیِ اپلیکیشن را وارد کنید تا فعال‌سازی کامل شود:');
+    body.appendChild(stepTwo);
+
+    const form = document.createElement('form');
+    form.className = 'pw-form';
+    form.noValidate = true;
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'form-field';
+    const label = document.createElement('label');
+    label.htmlFor = 'tfConfirmCode';
+    label.textContent = t('کد تأیید (۶ رقم)');
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.id = 'tfConfirmCode';
+    input.name = 'code';
+    input.inputMode = 'numeric';
+    input.pattern = '[0-9]*';
+    input.autocomplete = 'one-time-code';
+    input.maxLength = 6;
+    input.required = true;
+    wrapper.appendChild(label);
+    wrapper.appendChild(input);
+    form.appendChild(wrapper);
+
+    const submitButton = document.createElement('button');
+    submitButton.type = 'submit';
+    submitButton.className = 'primary-button';
+    submitButton.textContent = t('تأیید و فعال‌سازی');
+    form.appendChild(submitButton);
+
+    form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        tfClearError(overlay);
+        const code = input.value.trim();
+        if (!code) {
+            tfShowError(overlay, t('لطفاً کدِ تأیید را وارد کنید.'));
+            return;
+        }
+        tfSetBusy(overlay, true);
+        try {
+            await apiPost(endpoints.twoFactorConfirm, { code });
+            showToast(t('ورودِ دومرحله‌ای فعال شد؛ از این پس ورود، کدِ اپلیکیشنِ احرازگر را هم می‌خواهد.'), 'success');
+            renderTwoFactorState(overlay, true);
+        } catch (error) {
+            tfShowError(overlay, tfErrorMessage(error));
+        }
+    });
+
+    body.appendChild(form);
+    input.focus();
+};
+
+// حالتِ «خاموش»: توضیح + دکمه‌ی شروع.
+const renderTwoFactorDisabled = (overlay) => {
+    const body = overlay.querySelector('#tfBody');
+    body.replaceChildren();
+
+    const intro = document.createElement('p');
+    intro.className = 'field-hint';
+    intro.textContent = t('لایه‌ای دوم برایِ ورود: علاوه بر رمزِ عبور، کدِ یک‌بارمصرفِ زمان‌محورِ اپلیکیشنِ احرازگر (مثل Google Authenticator). حتی اگر رمزِ شما لو برود، بدونِ کدِ لحظه‌ایِ گوشی‌تان کسی وارد نمی‌شود.');
+    body.appendChild(intro);
+
+    const startButton = document.createElement('button');
+    startButton.type = 'button';
+    startButton.className = 'primary-button';
+    startButton.textContent = t('شروعِ فعال‌سازی');
+    startButton.addEventListener('click', () => {
+        tfClearError(overlay);
+        renderTwoFactorSetup(overlay);
+    });
+    body.appendChild(startButton);
+};
+
+// توزیع‌کننده‌ی حالت — همه‌ی مسیرهایِ بالا همین‌جا جمع می‌شوند.
+const renderTwoFactorState = (overlay, enabled) => {
+    tfClearError(overlay);
+    if (enabled) renderTwoFactorEnabled(overlay);
+    else renderTwoFactorDisabled(overlay);
+};
+
+const openTwoFactorModal = async () => {
+    const overlay =
+        document.querySelector(selectors.twoFactorModal) ||
+        buildTwoFactorModal();
+    tfClearError(overlay);
+    overlay.hidden = false;
+
+    const body = overlay.querySelector('#tfBody');
+    body.replaceChildren();
+    const loading = document.createElement('p');
+    loading.className = 'field-hint';
+    loading.textContent = t('در حالِ بررسی...');
+    body.appendChild(loading);
+
+    try {
+        const state = await apiGet(endpoints.twoFactorStatus);
+        renderTwoFactorState(overlay, !!state.enabled);
+    } catch (error) {
+        // ۴۰۱ خودش در apiRequest به صفحه‌یِ ورود هدایت می‌کند (الگوی مشترک):
+        body.replaceChildren();
+        tfShowError(overlay, error.message || t('خطایی رخ داده است.'));
+    }
+};
+
+const closeTwoFactorModal = () => {
+    const overlay = document.querySelector(selectors.twoFactorModal);
+    if (!overlay) return;
+    overlay.hidden = true;
+    // پاک‌سازیِ محتوا برایِ بارِ بعد (فیلدها/کلیدها در DOM نمانند):
+    const body = overlay.querySelector('#tfBody');
+    if (body) body.replaceChildren();
+};
+
+// دکمه‌یِ «ورودِ دومرحله‌ای» — اولین دکمه‌ی نوار (ترتیب: دومرحله‌ای ←
+// فعالیت‌ها ← تغییرِ رمز ← خروج)؛ در صفحاتِ بی‌لاگین هیچ کاری نمی‌کند.
+const injectTwoFactorButton = () => {
+    const anchor =
+        document.querySelector(selectors.securityEventsButton) ||
+        document.querySelector(selectors.changePasswordButton) ||
+        document.querySelector(selectors.logoutButton);
+    if (!anchor) return;
+    if (document.querySelector(selectors.twoFactorButton)) return;
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'ghost-button';
+    button.id = 'twoFactorButton';
+    button.textContent = t('ورودِ دومرحله‌ای');
+    button.addEventListener('click', (event) => {
+        event.preventDefault();
+        openTwoFactorModal();
+    });
+    anchor.parentNode.insertBefore(button, anchor);
+};
+
 // رویدادهایی که در همه‌ی صفحات مشترک‌اند (دکمه‌ی خروج، باز/بسته‌شدنِ سایدبارِ
 // موبایل با دکمه‌ی همبرگری و کلیک روی پس‌زمینه‌ی تیره) + به‌روزرسانیِ اولیه‌ی
 // نام کاربری و وضعیتِ اتصال. تقریباً هر initXPage این تابع را صدا می‌زند.
@@ -1019,6 +1426,10 @@ const bindGlobalEvents = () => {
     // دکمه‌ی «فعالیت‌های امنیتی» (از 2026-09-12): همان الگو، قبل از دکمه‌یِ
     // تغییرِ رمز (ترتیبِ نوار: فعالیت‌ها ← تغییرِ رمز ← خروج).
     injectSecurityEventsButton();
+
+    // دکمه‌ی «ورودِ دومرحله‌ای» (از 2026-09-14): همان الگو، قبل از فعالیت‌ها
+    // (ترتیبِ نهاییِ نوار: دومرحله‌ای ← فعالیت‌ها ← تغییرِ رمز ← خروج).
+    injectTwoFactorButton();
 
     const toggle = document.querySelector(selectors.sidebarToggle);
     const backdrop = document.querySelector(selectors.backdrop);
@@ -1745,6 +2156,42 @@ const loadPredictions = async () => {
 // صفحات ورود / ثبت‌نام
 // ---------------------------------------------------------------------
 
+// گامِ دومِ ورود (از 2026-09-14): ظاهرکردنِ فیلدِ «کد تأییدِ دومرحله‌ای» در
+// همان فرمِ login — دفعه‌ی اول فیلد را می‌سازد و برمی‌گرداند true؛ دفعاتِ
+// بعد فقط فوکوس می‌کند (کدِ غلط → فیلد همان‌جا می‌ماند، کاربر کدِ تازه
+// می‌زند). نامِ کاربری/رمز در فرم می‌مانند تا کاربر بتواند غلطی‌شان را
+// اصلاح کند؛ فیلدِ کد همیشه قبل از دکمه‌ی ورود می‌نشیند.
+const showLoginTotpStep = () => {
+    const form = document.getElementById('loginForm');
+    if (!form) return false;
+    const existing = form.querySelector('#loginTotp');
+    if (existing) {
+        existing.focus();
+        existing.select();
+        return false;
+    }
+    const wrapper = document.createElement('div');
+    wrapper.className = 'form-field';
+    const label = document.createElement('label');
+    label.htmlFor = 'loginTotp';
+    label.textContent = t('کد تأییدِ دومرحله‌ای (۶ رقم)');
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.id = 'loginTotp';
+    input.name = 'totp';
+    // کیبوردِ عددی رویِ موبایل + معنایِ دسترس‌پذیریِ «کدِ یک‌بارمصرفِ ورود»:
+    input.inputMode = 'numeric';
+    input.pattern = '[0-9]*';
+    input.autocomplete = 'one-time-code';
+    input.maxLength = 6;
+    input.required = true;
+    wrapper.appendChild(label);
+    wrapper.appendChild(input);
+    form.insertBefore(wrapper, form.querySelector('button.auth-button'));
+    input.focus();
+    return true;
+};
+
 const handleLogin = () => {
     const form = document.getElementById('loginForm');
     if (!form) return;
@@ -1769,6 +2216,10 @@ const handleLogin = () => {
         event.preventDefault();
         const username = form.username.value.trim();
         const password = form.password.value;
+        // گامِ دومِ ورود (از 2026-09-14): اگر سرور پرچمِ requires_2fa داده
+        // باشد، فیلدِ کد در فرم ظاهر شده و مقدارش همراهِ رمز می‌رود.
+        const codeField = form.querySelector('#loginTotp');
+        const totp = codeField ? codeField.value.trim() : undefined;
 
         if (!username || !password) {
             showToast(t('لطفاً همه فیلدها را کامل کنید.'), 'error');
@@ -1777,9 +2228,11 @@ const handleLogin = () => {
 
         try {
             // skipAuth: true چون هنوز توکنی نداریم که در هدر بفرستیم
+            const payload = { username, password };
+            if (totp !== undefined) payload.totp = totp;
             const data = await apiPost(
                 endpoints.login,
-                { username, password },
+                payload,
                 { skipAuth: true },
             );
             setToken(data.access);
@@ -1790,6 +2243,19 @@ const handleLogin = () => {
             showToast(t('ورود موفقیت‌آمیز بود.'), 'success');
             window.location.href = 'index.html';
         } catch (error) {
+            // دروازه‌ی دومرحله‌ای: رمز درست بود ولی کد لازم/غلط — فیلدِ کد را
+            // نشان بده؛ بارِ اول با توضیحِ «info»، بارهایِ بعد با پیامِ خودِ سرور.
+            // (پرچمِ requires_2fa فقط بعد از رمزِ درست می‌آید — ضدِ کشفِ حساب.)
+            if (error.data && error.data.requires_2fa) {
+                const firstTime = showLoginTotpStep();
+                showToast(
+                    firstTime
+                        ? t('رمز درست است؛ حالا کدِ تأییدِ اپلیکیشنِ احرازگر را وارد کنید.')
+                        : error.message,
+                    firstTime ? 'info' : 'error',
+                );
+                return;
+            }
             showToast(error.message, 'error');
         }
     });

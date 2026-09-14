@@ -258,6 +258,26 @@ const TRANSLATIONS = {
     "هنوز رویدادی ثبت نشده است.": "No security events recorded yet.",
     "خطا در دریافتِ رویدادها.": "Failed to load security events.",
     "ناشناس": "Unknown",
+    // --- ورودِ دومرحله‌ای (از 2026-09-14) ---
+    "ورودِ دومرحله‌ای": "Two-Factor Sign-In",
+    "کد تأییدِ دومرحله‌ای (۶ رقم)": "Two-factor verification code (6 digits)",
+    "رمز درست است؛ حالا کدِ تأییدِ اپلیکیشنِ احرازگر را وارد کنید.": "Password accepted; now enter the code from your authenticator app.",
+    "ورودِ دومرحله‌ای فعال است ✅ — ورود علاوه بر رمزِ عبور، کدِ لحظه‌ایِ اپلیکیشنِ احرازگر را هم می‌خواهد.": "Two-factor sign-in is ON ✅ — signing in requires the live code from your authenticator app in addition to your password.",
+    "کد تأییدِ فعلیِ اپلیکیشن": "Current code from the app",
+    "خاموش‌کردنِ ورودِ دومرحله‌ای": "Turn off two-factor sign-in",
+    "در حالِ ساختِ کلید...": "Generating key...",
+    "مرحله‌ی ۱ — این کلید را در اپلیکیشنِ احرازگر (Google Authenticator و مشابه‌ها) ثبت کنید:": "Step 1 — register this key in your authenticator app (Google Authenticator and similar):",
+    "بارکدِ ثبتِ کلید در اپلیکیشنِ احرازگر": "QR code for registering the key in your authenticator app",
+    "بارکد در دسترس نیست — کلیدِ دستیِ زیر را در اپلیکیشن وارد کنید.": "QR unavailable — enter the manual key below in your app.",
+    "بازکردن در اپلیکیشنِ احرازگر (موبایل)": "Open in authenticator app (mobile)",
+    "مرحله‌ی ۲ — کدِ ۶رقمیِ فعلیِ اپلیکیشن را وارد کنید تا فعال‌سازی کامل شود:": "Step 2 — enter the app's current 6-digit code to finish enabling:",
+    "کد تأیید (۶ رقم)": "Verification code (6 digits)",
+    "تأیید و فعال‌سازی": "Verify & enable",
+    "لطفاً کدِ تأیید را وارد کنید.": "Please enter the verification code.",
+    "لایه‌ای دوم برایِ ورود: علاوه بر رمزِ عبور، کدِ یک‌بارمصرفِ زمان‌محورِ اپلیکیشنِ احرازگر (مثل Google Authenticator). حتی اگر رمزِ شما لو برود، بدونِ کدِ لحظه‌ایِ گوشی‌تان کسی وارد نمی‌شود.": "A second layer for sign-in: besides your password, a time-based one-time code from an authenticator app (like Google Authenticator). Even if your password leaks, nobody gets in without your phone's live code.",
+    "شروعِ فعال‌سازی": "Start enabling",
+    "ورودِ دومرحله‌ای فعال شد؛ از این پس ورود، کدِ اپلیکیشنِ احرازگر را هم می‌خواهد.": "Two-factor sign-in enabled; signing in now also requires the code from your authenticator app.",
+    "ورودِ دومرحله‌ای خاموش شد.": "Two-factor sign-in disabled.",
 };
 
 // زبانِ فعال: فقط «en» ترجمه می‌شود؛ هر مقدارِ دیگر = فارسی (پیش‌فرض)

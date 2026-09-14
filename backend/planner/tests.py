@@ -4297,3 +4297,630 @@ class SecurityAuditAntiEnumerationTests(BaseAPITestCase):
             ).count(), 1,
         )
         self.assertEqual(SecurityEvent.objects.count(), 1)
+
+
+# ---------------------------------------------------------------------------
+# ورودِ دومرحله‌ای (از 2026-09-14) — TOTP خالصِ RFC 6238 + چهار مسیرِ API
+# ---------------------------------------------------------------------------
+
+import base64 as _base64  # noqa: E402
+
+from planner.totp import (  # noqa: E402
+    build_otpauth_uri, current_step, generate_secret, totp_code, verify_totp,
+)
+
+_2FA_STATUS_URL = '/api/auth/2fa/'
+_2FA_SETUP_URL = '/api/auth/2fa/setup/'
+_2FA_CONFIRM_URL = '/api/auth/2fa/confirm/'
+_2FA_DISABLE_URL = '/api/auth/2fa/disable/'
+
+
+def _enable_two_factor(client):
+    """فعال‌سازیِ کاملِ 2FA از راهِ API (setup + confirm با کدِ درست).
+
+    برمی‌گرداند: (secret, code) — code همان کدی است که برایِ تأیید مصرف
+    شد (طبقِ طراحی در confirm «سوزانده» نمی‌شود تا اولین ورود بی‌درنگ ممکن
+    باشد؛ مصرفش در ورود است).
+    """
+    secret = client.post(_2FA_SETUP_URL).json()['secret']
+    code = totp_code(secret)
+    resp = client.post(_2FA_CONFIRM_URL, {'code': code}, format='json')
+    assert resp.status_code == status.HTTP_200_OK, resp.content
+    return secret, code
+
+
+def _next_step_code(secret):
+    """کدِ «گامِ زمانیِ بعد» — برایِ مصرفِ دومِ در همان پنجره‌ی ۳۰ثانیه‌ای.
+
+    بعد از یک مصرف (مثلاً ورود)، کدِ گامِ فعلی تا چرخشِ بعدی رد می‌شود
+    (ضدِ replay — طراحی)؛ تست‌ها به‌جایِ خوابیدن، کدِ گامِ بعد را
+    می‌سازند که در پنجره‌ی verify (±۱ گام) پذیرفته می‌شود — همان چیزی
+    که کاربرِ واقعی بعد از چرخشِ کد در اپلیکیشن می‌کند.
+    """
+    return totp_code(secret, timestamp=(current_step() + 1) * 30 + 1)
+
+
+class TOTPMathTests(SimpleTestCase):
+    """ریاضیاتِ خالصِ planner/totp.py — بدونِ DB (الگوی MLCalibrationMathTests).
+
+    بردارهایِ مرجعِ RFC 6238 ضمیمه‌ی B (HMAC-SHA1، ۸ رقم) با کلیدِ معروفِ
+    ASCII «12345678901234567890»: اگر پیاده‌سازی با این‌ها جور باشد، با
+    هر اپلیکیشنِ احرازگرِ استانداردی جور است.
+    """
+
+    # کلیدِ مرجعِ RFC 6238 §Appendix B (base32 کدشده)
+    RFC_SECRET = _base64.b32encode(b'12345678901234567890').decode()
+
+    def test_rfc6238_appendix_b_vectors(self):
+        """شش بردارِ رسمیِ ۸رقمی — تطبیقِ بایت‌به‌بایت با RFC."""
+        vectors = [
+            (59, '94287082'),
+            (1111111109, '07081804'),
+            (1111111111, '14050471'),
+            (1234567890, '89005924'),
+            (2000000000, '69279037'),
+            (20000000000, '65353130'),
+        ]
+        for timestamp, expected in vectors:
+            with self.subTest(timestamp=timestamp):
+                self.assertEqual(
+                    totp_code(self.RFC_SECRET, timestamp=timestamp, digits=8),
+                    expected,
+                )
+
+    def test_rfc6238_six_digit_forms(self):
+        """فرمِ ۶رقمی = همان کد mod 10^6 (سازگار با اپ‌هایِ احرازگر)."""
+        vectors = [
+            (59, '287082'), (1111111109, '081804'), (1111111111, '050471'),
+            (1234567890, '005924'), (2000000000, '279037'), (20000000000, '353130'),
+        ]
+        for timestamp, expected in vectors:
+            with self.subTest(timestamp=timestamp):
+                self.assertEqual(
+                    totp_code(self.RFC_SECRET, timestamp=timestamp), expected,
+                )
+
+    def test_verify_accepts_current_and_adjacent_steps(self):
+        """پنجره‌ی ±۱ گام: کدِ همین گام و یک گام قبل/بعد پذیرفته می‌شود."""
+        now = 5_000_000 * 30 + 10  # وسطِ گام — نه روی مرز
+        self.assertEqual(verify_totp(self.RFC_SECRET, totp_code(self.RFC_SECRET, timestamp=now), timestamp=now), now // 30)
+        self.assertEqual(
+            verify_totp(self.RFC_SECRET, totp_code(self.RFC_SECRET, timestamp=now - 30), timestamp=now),
+            now // 30 - 1,
+        )
+        self.assertEqual(
+            verify_totp(self.RFC_SECRET, totp_code(self.RFC_SECRET, timestamp=now + 30), timestamp=now),
+            now // 30 + 1,
+        )
+
+    def test_verify_rejects_two_steps_old_code(self):
+        """دو گام قبل = خارج از پنجره → None (کدِ کهنه دیگر کار نمی‌کند)."""
+        now = 5_000_000 * 30 + 10
+        self.assertIsNone(verify_totp(
+            self.RFC_SECRET, totp_code(self.RFC_SECRET, timestamp=now - 60), timestamp=now,
+        ))
+
+    def test_verify_replay_protection_via_last_used_step(self):
+        """ضدِ پخشِ مجدد: گام‌هایِ <= آخرینِ مصرف‌شده همیشه رد می‌شوند."""
+        now = 5_000_000 * 30 + 10
+        code = totp_code(self.RFC_SECRET, timestamp=now)
+        # بدونِ سابقه‌ی مصرف → آزاد
+        self.assertEqual(verify_totp(self.RFC_SECRET, code, timestamp=now), now // 30)
+        # بعد از مصرفِ همین گام → همان کد و کدِ گامِ قبل، هر دو رد:
+        self.assertIsNone(verify_totp(self.RFC_SECRET, code, timestamp=now, last_used_step=now // 30))
+        self.assertIsNone(verify_totp(
+            self.RFC_SECRET, totp_code(self.RFC_SECRET, timestamp=now - 30),
+            timestamp=now, last_used_step=now // 30,
+        ))
+        # گامِ بعدِ پنجره هنوز آزاد است (کدِ تازه):
+        self.assertEqual(
+            verify_totp(self.RFC_SECRET, totp_code(self.RFC_SECRET, timestamp=now + 30),
+                        timestamp=now, last_used_step=now // 30),
+            now // 30 + 1,
+        )
+
+    def test_verify_rejects_malformed_codes(self):
+        """کوتاه/بلند/غیرعددی/خالی → None (بدونِ exception)."""
+        now = 5_000_000 * 30 + 10
+        for bad in ('12345', '1234567', '12a456', '', '123 45', None):
+            with self.subTest(code=bad):
+                self.assertIsNone(verify_totp(self.RFC_SECRET, bad, timestamp=now))
+
+    def test_verify_tolerates_humanized_secret(self):
+        """کلیدِ تایپ‌شدهِ دستی (حروفِ کوچک + فاصله/خط‌تیره‌ی گروه‌بندی) هم
+        راستی‌آزمایی می‌شود — همان چیزی که اپلیکیشن‌هایِ احرازگر نشان می‌دهند."""
+        secret = generate_secret()
+        humanized = ' '.join(secret[i:i + 4] for i in range(0, len(secret), 4)).lower()
+        code = totp_code(secret)
+        self.assertIsNotNone(verify_totp(humanized, code))
+
+    def test_generated_secret_shape_and_uniqueness(self):
+        """۲۰ بایت → ۳۲ نویسه‌ی base32 (A-Z، 2-7)؛ دو تولید یکسان نیستند."""
+        first, second = generate_secret(), generate_secret()
+        self.assertEqual(len(first), 32)
+        self.assertTrue(all(c in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567' for c in first))
+        self.assertNotEqual(first, second)
+
+    def test_otpauth_uri_shape(self):
+        """otpauth:// با همه‌ی پارامترهایِ صریح + نقلِ قولِ ایمنِ برچسب."""
+        uri = build_otpauth_uri('JBSWY3DPEHPK3PXP', 'ali ce')
+        self.assertTrue(uri.startswith('otpauth://totp/Smart%20Study%20Planner%3Aali%20ce?'))
+        self.assertIn('secret=JBSWY3DPEHPK3PXP', uri)
+        self.assertIn('issuer=Smart%20Study%20Planner', uri)
+        self.assertIn('algorithm=SHA1', uri)
+        self.assertIn('digits=6', uri)
+        self.assertIn('period=30', uri)
+
+
+@override_settings(**_LOCMEM)
+class TwoFactorSetupConfirmAPITests(BaseAPITestCase):
+    """setup/confirm — جریانِ فعال‌سازی: شکلِ کلید، حالتِ میانیِ امن،
+    پایداریِ نشست‌ها و عدمِ احیایِ توکن‌هایِ مُرده."""
+
+    def test_status_requires_authentication(self):
+        self.assertEqual(self.client.get(_2FA_STATUS_URL).status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_default_status_is_disabled(self):
+        resp = self.client_as(self.alice).get(_2FA_STATUS_URL)
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.json(), {'enabled': False})
+
+    def test_setup_requires_authentication(self):
+        self.assertEqual(self.client.post(_2FA_SETUP_URL).status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_setup_returns_secret_and_otpauth_uri(self):
+        resp = self.client_as(self.alice).post(_2FA_SETUP_URL)
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        body = resp.json()
+        self.assertEqual(len(body['secret']), 32)
+        self.assertIn(body['secret'], body['otpauth_uri'])
+        self.assertIn('otpauth://totp/', body['otpauth_uri'])
+        # کلیدِ تأییدنشده هنوز «فعال» نیست (حالتِ میانیِ امن):
+        self.assertEqual(self.client_as(self.alice).get(_2FA_STATUS_URL).json(), {'enabled': False})
+
+    def test_setup_regenerates_unconfirmed_secret(self):
+        """setup دوباره قبل ازِ تأیید → کلیدِ تازه (جایگزینی، نه انباشتن)."""
+        client = self.client_as(self.alice)
+        first = client.post(_2FA_SETUP_URL).json()['secret']
+        second = client.post(_2FA_SETUP_URL).json()['secret']
+        self.assertNotEqual(first, second)
+
+    def test_setup_rejected_when_already_enabled(self):
+        client = self.client_as(self.alice)
+        _enable_two_factor(client)
+        resp = client.post(_2FA_SETUP_URL)
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_setup_does_not_kill_existing_session(self):
+        """فعال‌سازیِ 2FA نشست‌کُش نیست: توکنِ قبل از setup زنده می‌ماند
+        (رکوردِ تازه با password_changed_atِ مبنایِ بی‌اثر ساخته می‌شود)."""
+        client = self.client_as(self.alice)
+        self.assertEqual(client.post(_2FA_SETUP_URL).status_code, status.HTTP_200_OK)
+        # همان توکنِ صادرشده «قبل از» setup:
+        self.assertEqual(client.get(_2FA_STATUS_URL).status_code, status.HTTP_200_OK)
+
+    def test_setup_preserves_password_change_invalidation(self):
+        """رگرسیونِ مسیرِ update: setup فقط فیلدهای 2FA را می‌نویسد — مهرِ
+        تغییرِ رمزِ موجود (سازوکارِ ابطالِ توکن در authentication.py) بایت‌به‌بایت
+        دست‌نخورده می‌ماند. (دامِ update_or_createِ ساده با defaults: بازنویسیِ
+        مهر، توکن‌هایِ مُرده‌ی بعد ازِ تغییرِ رمز را زنده می‌کرد.)
+        مهر مستقیماً دستکاری می‌شود (الگویِ StaleAccessTokenInvalidationTests)
+        تا مرزِ یک‌ثانیه‌ایِ iat تست را قطعی نکند."""
+        marker = timezone.now() - timedelta(hours=1)
+        UserSecurityProfile.objects.create(user=self.alice, password_changed_at=marker)
+        # توکنِ تازه (بعد از مهر) زنده است و setup می‌زند:
+        client = self.client_as(self.alice)
+        self.assertEqual(client.post(_2FA_SETUP_URL).status_code, status.HTTP_200_OK)
+        # ... ولی مهرِ تغییرِ رمز همانِ یک‌ساعتِ پیش ماند:
+        profile = UserSecurityProfile.objects.get(user=self.alice)
+        self.assertEqual(profile.password_changed_at, marker)
+        self.assertIsNotNone(profile.totp_secret)
+
+    def test_confirm_without_setup_rejected(self):
+        resp = self.client_as(self.alice).post(_2FA_CONFIRM_URL, {'code': '123456'}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('code', resp.json())
+
+    def test_confirm_with_wrong_code_rejected(self):
+        client = self.client_as(self.alice)
+        client.post(_2FA_SETUP_URL)
+        resp = client.post(_2FA_CONFIRM_URL, {'code': '000000'}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(client.get(_2FA_STATUS_URL).json(), {'enabled': False})
+
+    def test_confirm_with_correct_code_enables(self):
+        client = self.client_as(self.alice)
+        secret = client.post(_2FA_SETUP_URL).json()['secret']
+        resp = client.post(_2FA_CONFIRM_URL, {'code': totp_code(secret)}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertTrue(resp.json()['enabled'])
+        profile = UserSecurityProfile.objects.get(user=self.alice)
+        self.assertIsNotNone(profile.totp_confirmed_at)
+        self.assertEqual(profile.totp_secret, secret)
+        # کدِ تأیید سوزانده «نمی‌شود» — ورودِ بی‌درنگ با همان کد ممکن است:
+        self.assertIsNone(profile.last_used_totp_step)
+
+    def test_confirm_rejected_when_already_enabled(self):
+        client = self.client_as(self.alice)
+        _enable_two_factor(client)
+        resp = client.post(_2FA_CONFIRM_URL, {'code': '123456'}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+@override_settings(**_LOCMEM)
+class TwoFactorLoginFlowTests(BaseAPITestCase):
+    """دروازه‌ی 2FA در login — چالش، پنجره، replay و ضدِ کشفِ حساب."""
+
+    def _login(self, password='pw-12345678', totp=None):
+        payload = {'username': 'alice', 'password': password}
+        if totp is not None:
+            payload['totp'] = totp
+        return self.client.post('/api/auth/login/', payload, format='json')
+
+    def test_login_without_code_challenges(self):
+        """رمزِ درست بدونِ کد → ۴۰۱ + پرچمِ requires_2fa و هیچ توکنی."""
+        _enable_two_factor(self.client_as(self.alice))
+        resp = self._login()
+        self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+        body = resp.json()
+        self.assertTrue(body.get('requires_2fa'))
+        self.assertNotIn('access', body)
+        self.assertNotIn('refresh', body)
+        # نه رویدادِ ورودِ موفق نه ناموفقِ ساده — هنوز در میانه‌ی راه است:
+        self.assertFalse(SecurityEvent.objects.filter(
+            user=self.alice,
+            event_type__in=[
+                SecurityEvent.EventType.LOGIN_SUCCESS,
+                SecurityEvent.EventType.LOGIN_FAILED,
+            ],
+        ).exists())
+
+    def test_login_with_wrong_code_rejected_and_logged(self):
+        client = self.client_as(self.alice)
+        _enable_two_factor(client)
+        resp = self._login(totp='000000')
+        self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertTrue(resp.json().get('requires_2fa'))
+        self.assertNotIn('access', resp.json())
+        self.assertEqual(SecurityEvent.objects.filter(
+            user=self.alice, event_type=SecurityEvent.EventType.LOGIN_2FA_FAILED,
+        ).count(), 1)
+
+    def test_login_with_correct_code_returns_tokens(self):
+        client = self.client_as(self.alice)
+        _enable_two_factor(client)
+        resp = self._login(totp=totp_code(UserSecurityProfile.objects.get(user=self.alice).totp_secret))
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertIn('access', resp.json())
+        self.assertIn('refresh', resp.json())
+        self.assertEqual(SecurityEvent.objects.filter(
+            user=self.alice, event_type=SecurityEvent.EventType.LOGIN_SUCCESS,
+        ).count(), 1)
+
+    def test_same_code_replay_rejected_after_use(self):
+        """کدی که یک‌بار ورود کرد، در همان گام دوباره کار نمی‌کند (RFC 6238 §5.2)."""
+        client = self.client_as(self.alice)
+        secret, code = _enable_two_factor(client)
+        self.assertEqual(self._login(totp=code).status_code, status.HTTP_200_OK)
+        replay = self._login(totp=code)
+        self.assertEqual(replay.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertTrue(replay.json().get('requires_2fa'))
+
+    def test_confirm_code_usable_for_immediate_login(self):
+        """ضدِ قفلِ تصادفی: همان کدِ تأییدِ فعال‌سازی باید بلافاصله برایِ
+        اولین ورود هم کار کند (مصرف در confirm نیست، در ورود است)."""
+        client = self.client_as(self.alice)
+        _, code = _enable_two_factor(client)
+        self.assertEqual(self._login(totp=code).status_code, status.HTTP_200_OK)
+
+    def test_previous_step_code_accepted_within_window(self):
+        """کدِ گامِ قبل (خطای ~۳۰ ثانیه‌ایِ ساعت) در پنجره‌ی ±۱ پذیرفته می‌شود."""
+        client = self.client_as(self.alice)
+        _enable_two_factor(client)
+        secret = UserSecurityProfile.objects.get(user=self.alice).totp_secret
+        prev_code = totp_code(secret, timestamp=(current_step() - 1) * 30 + 1)
+        self.assertEqual(self._login(totp=prev_code).status_code, status.HTTP_200_OK)
+
+    def test_non_numeric_code_rejected(self):
+        client = self.client_as(self.alice)
+        _enable_two_factor(client)
+        resp = self._login(totp='12ab56')
+        self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertTrue(resp.json().get('requires_2fa'))
+
+    def test_wrong_password_has_no_2fa_flag(self):
+        """رمزِ غلط برایِ کاربرِ 2FAدار → همان ۴۰۱ عمومیِ همیشگی، بدونِ
+        پرچم و بدونِ رویدادِ کد (پرچم فقط بعد ازِ رمزِ درست)."""
+        _enable_two_factor(self.client_as(self.alice))
+        resp = self._login(password='WRONG', totp='123456')
+        self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertNotIn('requires_2fa', resp.json())
+        self.assertFalse(SecurityEvent.objects.filter(
+            user=self.alice, event_type=SecurityEvent.EventType.LOGIN_2FA_FAILED,
+        ).exists())
+
+    def test_unknown_user_response_unchanged(self):
+        """کاربرِ ناموجود → بدنه‌ی همیشگی، بدونِ requires_2fa (ضدِ کشفِ حساب)."""
+        _enable_two_factor(self.client_as(self.alice))
+        resp = self.client.post(
+            '/api/auth/login/', {'username': 'ghost', 'password': 'x'}, format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertNotIn('requires_2fa', resp.json())
+
+    def test_user_without_2fa_login_unchanged(self):
+        """رگرسیون: کاربرِ بدونِ 2FA همانِ قبل — ۲۰۰ با توکن‌ها، بدونِ پرچم."""
+        resp = self._login()
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertIn('access', resp.json())
+        self.assertNotIn('requires_2fa', resp.json())
+
+    def test_full_login_flow_events_sequence(self):
+        """دنباله‌ی کامل: کدِ غلط → login_2fa_failed؛ کدِ درست → login_success."""
+        client = self.client_as(self.alice)
+        secret, _ = _enable_two_factor(client)
+        self._login(totp='000000')
+        self._login(totp=totp_code(secret))
+        sequence = list(SecurityEvent.objects.filter(
+            user=self.alice,
+            event_type__in=[
+                SecurityEvent.EventType.LOGIN_2FA_FAILED,
+                SecurityEvent.EventType.LOGIN_SUCCESS,
+            ],
+        ).values_list('event_type', flat=True).order_by('id'))
+        self.assertEqual(sequence, ['login_2fa_failed', 'login_success'])
+
+
+@patch.object(SimpleRateThrottle, 'THROTTLE_RATES', _THROTTLE_TEST_RATES)
+@override_settings(**_LOCMEM)
+class TwoFactorThrottleTests(BaseAPITestCase):
+    """حدسِ کدِ ۶رقمی هم زیرِ همان سقفِ brute-forceِ login می‌ماند."""
+
+    def test_2fa_code_burst_gets_throttled(self):
+        """بورستِ کدهایِ غلط رویِ login → سومی ۴۲۹ (scope auth — همان رمز)."""
+        _enable_two_factor(self.client_as(self.alice))
+        self.assertEqual(self._login_code('000001').status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(self._login_code('000002').status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(self._login_code('000003').status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
+    def _login_code(self, code):
+        return self.client.post(
+            '/api/auth/login/',
+            {'username': 'alice', 'password': 'pw-12345678', 'totp': code},
+            format='json',
+        )
+
+
+@override_settings(**_LOCMEM)
+class TwoFactorDisableAPITests(BaseAPITestCase):
+    """خاموش‌کردن با دفاعِ دولایه (رمز + کد) و پایداریِ نشست‌ها."""
+
+    def test_disable_requires_authentication(self):
+        self.assertEqual(
+            self.client.post(_2FA_DISABLE_URL, {'password': 'x', 'code': '123456'}, format='json').status_code,
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+    def test_disable_when_not_enabled_rejected(self):
+        resp = self.client_as(self.alice).post(
+            _2FA_DISABLE_URL, {'password': 'pw-12345678', 'code': '123456'}, format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_disable_with_wrong_password_rejected(self):
+        client = self.client_as(self.alice)
+        secret, _ = _enable_two_factor(client)
+        resp = client.post(
+            _2FA_DISABLE_URL,
+            {'password': 'WRONG', 'code': _next_step_code(secret)},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('password', resp.json())
+        self.assertTrue(UserSecurityProfile.objects.get(user=self.alice).two_factor_enabled)
+
+    def test_disable_with_wrong_code_rejected(self):
+        client = self.client_as(self.alice)
+        _enable_two_factor(client)
+        resp = client.post(
+            _2FA_DISABLE_URL,
+            {'password': 'pw-12345678', 'code': '000000'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('code', resp.json())
+        self.assertTrue(UserSecurityProfile.objects.get(user=self.alice).two_factor_enabled)
+
+    def test_disable_with_password_and_code_succeeds(self):
+        client = self.client_as(self.alice)
+        secret, _ = _enable_two_factor(client)
+        resp = client.post(
+            _2FA_DISABLE_URL,
+            {'password': 'pw-12345678', 'code': _next_step_code(secret)},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertFalse(resp.json()['enabled'])
+        profile = UserSecurityProfile.objects.get(user=self.alice)
+        self.assertFalse(profile.two_factor_enabled)
+        self.assertIsNone(profile.totp_secret)
+        self.assertIsNone(profile.totp_confirmed_at)
+        self.assertIsNone(profile.last_used_totp_step)
+        self.assertEqual(client.get(_2FA_STATUS_URL).json(), {'enabled': False})
+
+    def test_sessions_survive_enable_and_disable(self):
+        """تصمیمِ طراحی: فعال/خاموش‌کردنِ 2FA نشست‌ها را نمی‌کُشد (برخلافِ
+        تغییرِ رمز) — توکنِ قبل از هر دو هنوز کار می‌کند."""
+        client = self.client_as(self.alice)
+        secret, _ = _enable_two_factor(client)
+        self.assertEqual(client.get(_2FA_STATUS_URL).status_code, status.HTTP_200_OK)
+        client.post(
+            _2FA_DISABLE_URL,
+            {'password': 'pw-12345678', 'code': _next_step_code(secret)},
+            format='json',
+        )
+        self.assertEqual(client.get(_2FA_STATUS_URL).status_code, status.HTTP_200_OK)
+
+    def test_login_without_code_after_disable(self):
+        client = self.client_as(self.alice)
+        secret, _ = _enable_two_factor(client)
+        client.post(
+            _2FA_DISABLE_URL,
+            {'password': 'pw-12345678', 'code': _next_step_code(secret)},
+            format='json',
+        )
+        resp = self.client.post(
+            '/api/auth/login/',
+            {'username': 'alice', 'password': 'pw-12345678'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertIn('access', resp.json())
+
+
+@override_settings(**_LOCMEM)
+class TwoFactorPasswordResetTests(BaseAPITestCase):
+    """مسیرِ بازیابیِ ضدِ قفلِ ابدی: بازنشانیِ رمز (با لینکِ ایمیل) 2FA را
+    هم خاموش می‌کند تا «گم‌کردنِ هم‌زمانِ گوشی و رمز» حساب را برای همیشه
+    قفل نکند."""
+
+    def setUp(self):
+        super().setUp()
+        self.alice.email = 'alice@example.com'
+        self.alice.save(update_fields=['email'])
+
+    def _reset_password(self, new_password='pw-brand-new-789'):
+        uid, token = _make_reset_link(self.alice)
+        return self.client.post(
+            _RESET_CONFIRM_URL,
+            {'uid': uid, 'token': token, 'new_password': new_password},
+            format='json',
+        )
+
+    def test_password_reset_disables_two_factor(self):
+        _enable_two_factor(self.client_as(self.alice))
+        mail.outbox.clear()
+        resp = self._reset_password()
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertFalse(UserSecurityProfile.objects.get(user=self.alice).two_factor_enabled)
+        # دو رویدادِ متمایزِ «تغییرِ preconditionِ ورود»:
+        self.assertEqual(SecurityEvent.objects.filter(
+            user=self.alice, event_type=SecurityEvent.EventType.TWO_FACTOR_DISABLED,
+        ).count(), 1)
+        self.assertEqual(SecurityEvent.objects.filter(
+            user=self.alice, event_type=SecurityEvent.EventType.PASSWORD_RESET_COMPLETED,
+        ).count(), 1)
+        # دو ایمیلِ متمایز: اطلاعِ بازنشانیِ رمز + اطلاعِ خاموشیِ 2FA:
+        subjects = [m.subject for m in mail.outbox]
+        self.assertEqual(len(mail.outbox), 2, subjects)
+
+    def test_login_after_reset_needs_no_code(self):
+        _enable_two_factor(self.client_as(self.alice))
+        self._reset_password()
+        resp = self.client.post(
+            '/api/auth/login/',
+            {'username': 'alice', 'password': 'pw-brand-new-789'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertIn('access', resp.json())
+
+    def test_reset_without_2fa_records_no_2fa_event(self):
+        """رگرسیون: کاربرِ بدونِ 2FA → همان جریانِ قبلیِ بازیابی، بدونِ
+        رویداد/ایمیلِ 2FA (یک ایمیل: اطلاعِ بازنشانی)."""
+        self._reset_password()
+        self.assertFalse(SecurityEvent.objects.filter(
+            event_type=SecurityEvent.EventType.TWO_FACTOR_DISABLED,
+        ).exists())
+        self.assertEqual(len(mail.outbox), 1)
+
+    def test_two_factor_events_visible_with_english_labels(self):
+        client = self.client_as(self.alice)
+        secret, _ = _enable_two_factor(client)
+        client.post(
+            _2FA_DISABLE_URL,
+            {'password': 'pw-12345678', 'code': _next_step_code(secret)},
+            format='json', HTTP_ACCEPT_LANGUAGE='en',
+        )
+        events = client.get(
+            '/api/auth/security/events/', HTTP_ACCEPT_LANGUAGE='en',
+        ).json()
+        by_type = {e['type']: e['label'] for e in events}
+        self.assertEqual(by_type.get('two_factor_enabled'), 'Two-factor sign-in enabled')
+        self.assertEqual(by_type.get('two_factor_disabled'), 'Two-factor sign-in disabled')
+
+
+@override_settings(**_LOCMEM)
+class TwoFactorNotificationEmailTests(BaseAPITestCase):
+    """ایمیلِ اطلاع‌رسانیِ فعال/خاموش‌شدنِ 2FA — الگویِ مشترکِ
+    _send_password_notification (محتوا، بی‌ایمیل، شکستِ SMTP، ترجمه‌ی en)."""
+
+    def setUp(self):
+        super().setUp()
+        self.alice.email = 'alice@example.com'
+        self.alice.save(update_fields=['email'])
+
+    def test_enable_sends_notification_email(self):
+        _enable_two_factor(self.client_as(self.alice))
+        self.assertEqual(len(mail.outbox), 1)
+        message = mail.outbox[0]
+        self.assertEqual(message.to, ['alice@example.com'])
+        self.assertEqual(
+            message.subject, 'فعال‌سازیِ ورودِ دومرحله‌ای — برنامه‌ریزِ هوشمندِ مطالعه',
+        )
+        self.assertIn('سلام alice،', message.body)
+        self.assertIn('نشانیِ فرستنده: 127.0.0.1', message.body)
+        self.assertIn('اگر شما این کار را نکرده‌اید', message.body)
+
+    def test_disable_sends_notification_email(self):
+        client = self.client_as(self.alice)
+        secret, _ = _enable_two_factor(client)
+        mail.outbox.clear()
+        client.post(
+            _2FA_DISABLE_URL,
+            {'password': 'pw-12345678', 'code': _next_step_code(secret)},
+            format='json',
+        )
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(
+            mail.outbox[0].subject, 'خاموش‌شدنِ ورودِ دومرحله‌ای — برنامه‌ریزِ هوشمندِ مطالعه',
+        )
+
+    def test_no_email_without_registered_address(self):
+        """باب (بدونِ ایمیل) → فعال‌سازی موفق ولی صندوقِ خالی — رویداد مستقل
+        از ایمیل ثبت می‌شود."""
+        client = self.client_as(self.bob)
+        secret = client.post(_2FA_SETUP_URL).json()['secret']
+        resp = client.post(_2FA_CONFIRM_URL, {'code': totp_code(secret)}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(mail.outbox), 0)
+        self.assertEqual(SecurityEvent.objects.filter(
+            user=self.bob, event_type=SecurityEvent.EventType.TWO_FACTOR_ENABLED,
+        ).count(), 1)
+
+    def test_smtp_failure_does_not_break_enable(self):
+        """شکستِ SMTP در اطلاع‌رسانی → خودِ فعال‌سازی هنوز ۲۰۰ (بلعیده و لاگ)."""
+        client = self.client_as(self.alice)
+        secret = client.post(_2FA_SETUP_URL).json()['secret']
+        with patch('planner.views.send_mail', side_effect=ConnectionError('SMTP down')):
+            resp = client.post(_2FA_CONFIRM_URL, {'code': totp_code(secret)}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertTrue(resp.json()['enabled'])
+        self.assertEqual(SecurityEvent.objects.filter(
+            user=self.alice, event_type=SecurityEvent.EventType.TWO_FACTOR_ENABLED,
+        ).count(), 1)
+
+    def test_notification_email_translated_to_english(self):
+        client = self.client_as(self.alice)
+        secret = client.post(_2FA_SETUP_URL).json()['secret']
+        client.post(
+            _2FA_CONFIRM_URL, {'code': totp_code(secret)},
+            format='json', HTTP_ACCEPT_LANGUAGE='en',
+        )
+        message = mail.outbox[0]
+        self.assertEqual(
+            message.subject, 'Two-factor sign-in enabled — Smart Study Planner',
+        )
+        self.assertIn('Hello alice,', message.body)
+        self.assertIn('Originating address: 127.0.0.1', message.body)
+        self.assertIn('If this was not you', message.body)

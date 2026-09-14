@@ -66,6 +66,18 @@ urlpatterns = [
     # خودِ توکنِ امضاشده است و throttle پیش‌فرضِ anon کافی است.
     path('auth/password/reset/', views.password_reset_request, name='password_reset_request'),
     path('auth/password/reset/confirm/', views.password_reset_confirm, name='password_reset_confirm'),
+    # ورودِ دومرحله‌ای (از 2026-09-14) — مدیریتِ لایه‌ی دومِ TOTP؛ همه فقط
+    # با توکنِ خودِ کاربر (کلید/لینکِ otpauth فقط برایِ صاحبِ نشست می‌رود):
+    #   GET  /api/auth/2fa/         → {enabled: true|false}
+    #   POST /api/auth/2fa/setup/   → کلیدِ تازه + otpauth (تا confirm بی‌اثر)
+    #   POST /api/auth/2fa/confirm/ → فعال‌سازی با اولین کدِ درست
+    #   POST /api/auth/2fa/disable/ → خاموش‌کردن با رمز + کدِ فعلی
+    # خودِ چالشِ کد در همان login اتفاق می‌افتد (پرچمِ requires_2fa در ۴۰۱) —
+    # endpoint جدا برایِ «گامِ دومِ ورود» لازم نیست.
+    path('auth/2fa/', views.twofa_status, name='twofa_status'),
+    path('auth/2fa/setup/', views.twofa_setup, name='twofa_setup'),
+    path('auth/2fa/confirm/', views.twofa_confirm, name='twofa_confirm'),
+    path('auth/2fa/disable/', views.twofa_disable, name='twofa_disable'),
     # تاریخچه‌ی رویدادهایِ امنیتی (از 2026-09-12): GET /api/auth/security/events/
     # — فقط با توکنِ خودِ کاربر؛ رویدادهایِ ضبط‌شده در login/تغییرِ رمز/بازیابی
     # (نوع + زمان + IP + User-Agent) با برچسبِ ترجمه‌شده با Accept-Language.

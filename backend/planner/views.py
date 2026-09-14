@@ -8,7 +8,8 @@
 #      استاندارد CRUD دارند و DRF می‌تواند مسیرهایشان را خودکار بسازد)
 # ----------------------------------------------------------------------------
 
-from datetime import date
+from datetime import date, datetime
+from datetime import timezone as dt_timezone
 
 from rest_framework import viewsets, status, permissions, pagination
 # api_view: تبدیل یک تابعِ ساده‌ی پایتون به یک View قابل‌فهم برای DRF
@@ -60,6 +61,10 @@ from .utils import generate_study_plan, format_plan_for_frontend, build_subject_
 # کاربر ↔ واقعیتِ ثبت‌شده» + پیش‌بینیِ ساعتِ واقعیِ موردنیاز و ریسکِ
 # عقب‌افتادن — جزئیات و محدودیت‌های مدل در planner/ml.py.
 from .ml import get_prediction_report
+# ورودِ دومرحله‌ای (از 2026-09-14): TOTP خالصِ RFC 6238 — تولیدِ کلید،
+# راستی‌آزماییِ کد و لینکِ otpauth، همه بدونِ هیچ وابستگیِ جدید
+# (الگوریتم و بردارهایِ تستِ رسمی در planner/totp.py).
+from .totp import build_otpauth_uri, generate_secret, verify_totp
 # محدودسازیِ نرخِ درخواست روی مسیرهایِ احرازِ هویت (از 2026-09-10): جلوگیری از
 # حمله‌ی حدسِ رمز (brute-force) — نرخ از متغیرِ محیطیِ DJANGO_AUTH_THROTTLE_RATE.
 from .throttles import AuthBurstThrottle
@@ -67,6 +72,14 @@ from .throttles import AuthBurstThrottle
 # لاگرِ ماژول — همه‌ی رشته‌هایِ «خطای زیرساختی که نباید به پاسخِ HTTP بریزد»
 # از این‌جا می‌گذرند (شکستِ SMTP در اطلاع‌رسانیِ امنیتی/بازیابی).
 logger = logging.getLogger(__name__)
+
+# مبنایِ «بی‌اثر» برایِ password_changed_at وقتی رکوردِ پروفایل به‌خاطرِ 2FA
+# ساخته می‌شود (twofa_setup): عمداً قدیمی‌تر از هر توکنِ صادرشده‌ای — ساختِ
+# رکوردِ پروفایل نباید نشست‌هایِ زنده را بکُشد (فعال‌سازیِ 2FA تصمیمِ
+# خودِ کاربرِ لاگین‌شده است، نه رویدادِ امنیتیِ نشست‌کُش مثلِ تغییرِ رمز؛
+# مقایسه‌ی آن در planner/authentication.py است: iat قدیمی‌تر از این مبنای
+# ۲۰۰۰ وجود ندارد، پس هیچ توکنی رد نمی‌شود).
+_EPOCH_BASELINE = datetime(2000, 1, 1, tzinfo=dt_timezone.utc)
 
 
 # ---------------------------------------------------------------------------
@@ -114,9 +127,51 @@ def login(request):
     # داشت، آبجکتِ کاربر را برمی‌گرداند، وگرنه None
     user = authenticate(username=username, password=password)
     if user:
+        # دروازه‌ی ورودِ دومرحله‌ای (از 2026-09-14): برایِ کاربرانی که 2FA
+        # را فعال کرده‌اند، رمزِ درست «نصفِ راه» است — بدونِ کدِ لحظه‌ایِ
+        # اپلیکیشنِ احرازگر هیچ توکنی صادر نمی‌شود (نه access، نه refresh).
+        # دو نکته‌ی قراردادی مهم:
+        #   ۱) پرچمِ requires_2fa فقط «بعد ازِ رمزِ درست» ظاهر می‌شود —
+        #      کاربرِ ناموجود/رمزِ غلط همان ۴۰۱ عمومیِ همیشگی را می‌گیرند
+        #      (این پرچم هیچ کانالِ کشفِ حسابی باز نمی‌کند؛ رمزِ درست خودش
+        #      قبلاً مالکیت را ثابت کرده است).
+        #   ۲) کدِ درست همان لحظه «مصرف» می‌شود (last_used_totp_step) —
+        #      پخشِ مجددِ همان کد در گامِ بعدی رد می‌شود (RFC 6238 §5.2).
+        profile = UserSecurityProfile.objects.filter(user=user).first()
+        if profile is not None and profile.two_factor_enabled:
+            code = (request.data.get('totp') or '').strip()
+            if not code:
+                return Response(
+                    {
+                        'detail': _('کد تأییدِ دومرحله‌ای را وارد کنید.'),
+                        'requires_2fa': True,
+                    },
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+            matched_step = _verify_totp_code(profile, code)
+            if matched_step is None:
+                # رمزِ درست بود ولی کد نه — این دقیقاً همان تلاشی است که
+                # صاحبِ حساب باید ببیند (رمز لو رفته ولی لایه‌ی دوم ایستاد).
+                SecurityEvent.record(
+                    user=user,
+                    event_type=SecurityEvent.EventType.LOGIN_2FA_FAILED,
+                    request=request,
+                )
+                return Response(
+                    {
+                        'detail': _('کد تأییدِ دومرحله‌ای نامعتبر یا منقضی است.'),
+                        'requires_2fa': True,
+                    },
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+            # مصرفِ کد (ضدِ replay) — قبل از صدورِ توکن تا رقابتِ دو
+            # درخواستِ هم‌زمان با یک کد، حداکثر یکی برنده شود.
+            profile.last_used_totp_step = matched_step
+            profile.save(update_fields=['last_used_totp_step'])
         # لاگِ رویدادهایِ امنیتی (از 2026-09-12): هر ورودِ موفق در تاریخچه‌ی
         # حسابِ خودِ کاربر ثبت می‌شود (IP + User-Agent) — کاربر می‌تواند از
         # GET /api/auth/security/events/ ببیند «چه وقلی از کجا» وارد شده است.
+        # (برایِ کاربرِ 2FAدار «موفق» یعنی: رمز + کد، هر دو درست.)
         SecurityEvent.record(
             user=user,
             event_type=SecurityEvent.EventType.LOGIN_SUCCESS,
@@ -177,6 +232,27 @@ def _invalidate_all_sessions(user):
         BlacklistedToken.objects.get_or_create(token=outstanding)
 
 
+def _verify_totp_code(profile, code):
+    """راستی‌آزماییِ کدِ TOTP با دفاعِ «کلیدِ خراب = کدِ نامعتبر» (نه ۵۰۰).
+
+    verify_totp در برابرِ کلیدِ base32ِ خرابِ ذخیره‌شده (دستکاری/آسیبِ دیتا)
+    exception می‌دهد؛ این‌جا بلعیده و لاگ می‌شود تا کاربر ۴۰۱ِ روشن بگیرد
+    (با راهِ نجاتِ شناخته‌شده: بازنشانیِ رمز که 2FA را هم خاموش می‌کند) و
+    نه ۵۰۰ِ بی‌راه‌حل. خروجی مثلِ خودِ verify_totp: گامِ منطبق یا None.
+    """
+    try:
+        return verify_totp(
+            profile.totp_secret, code,
+            last_used_step=profile.last_used_totp_step,
+        )
+    except Exception:  # noqa: BLE001 — نیتِ صریح: خرابیِ کلید ≠ خرابیِ مسیر
+        logger.exception(
+            'totp verification crashed for user pk=%s (corrupt secret?)',
+            profile.user_id,
+        )
+        return None
+
+
 def _send_password_notification(user, event):
     """ایمیلِ اطلاع‌رسانیِ امنیتی بعد از تغییر/بازنشانیِ رمز (از 2026-09-12).
 
@@ -233,6 +309,65 @@ def _send_password_notification(user, event):
     except Exception:  # noqa: BLE001 — نیتِ صریح: پنهان‌سازی از پاسخِ HTTP
         logger.exception(
             'security notification email failed for user pk=%s event=%s',
+            user.pk, event.event_type,
+        )
+
+
+def _send_2fa_notification(user, event):
+    """ایمیلِ اطلاع‌رسانیِ فعال/خاموش‌شدنِ ورودِ دومرحله‌ای (از 2026-09-14).
+
+    دقیقاً همان قواعدِ _send_password_notification (الگویِ مشترکِ «رویدادهای
+    پُرسیگنال»):
+    - فقط برایِ همین دو رویداد فرستاده می‌شود — نه ورود/کدِ نامعتبرِ روزمره
+      (سروصدا) — چون تغییرِ «چیزی که برایِ ورود لازم است» اتفاقی است که
+      صاحبِ حسابِ غافلگیرشده باید همان لحظه بداند.
+    - بدونِ ایمیلِ ثبت‌شده → هیچ؛ شکستِ SMTP → لاگ و بلع (logger.exception)
+      تا مسیرِ اصلی (خودِ فعال/خاموش‌کردن) ۵۰۰ نشود.
+    - متن‌ها gettext (fa/en با Accept-Language)؛ «اگر شما نبودید» + راهِ
+      عمل: بازنشانیِ رمز (که 2FA را هم خاموش می‌کند — همان مسیری که در
+      متن ایمیل به مالکِ واقعیِ حساب توصیه می‌شود).
+
+    ورودیِ event = رکوردِ SecurityEventِ همین لحظه (نوع + IP).
+    """
+    if not user.email:
+        return
+
+    is_enabled = event.event_type == SecurityEvent.EventType.TWO_FACTOR_ENABLED
+    if is_enabled:
+        subject = _('فعال‌سازیِ ورودِ دومرحله‌ای — برنامه‌ریزِ هوشمندِ مطالعه')
+        body = _(
+            'سلام %(username)s،\n\n'
+            'ورودِ دومرحله‌ای برایِ حسابِ شما فعال شد. از این پس ورود علاوه بر '
+            'رمزِ عبور، کدِ یک‌بارمصرفِ اپلیکیشنِ احرازگرِ شما را هم می‌خواهد.\n'
+            'نشانیِ فرستنده: %(ip)s\n\n'
+            'اگر این فعال‌سازی را شما انجام داده‌اید، نیازی به هیچ کاری نیست.\n'
+            'اگر شما این کار را نکرده‌اید، همین حالا از صفحه‌ی ورود با '
+            '«رمز را فراموش کرده‌اید؟» رمز را بازنشانی کنید؛ بازنشانیِ رمز، '
+            'ورودِ دومرحله‌ای را هم خاموش می‌کند.'
+        ) % {
+            'username': user.get_username(),
+            'ip': event.ip_address or _('نامشخص'),
+        }
+    else:
+        subject = _('خاموش‌شدنِ ورودِ دومرحله‌ای — برنامه‌ریزِ هوشمندِ مطالعه')
+        body = _(
+            'سلام %(username)s،\n\n'
+            'ورودِ دومرحله‌ایِ حسابِ شما خاموش شد؛ از این پس ورود فقط با '
+            'رمزِ عبور انجام می‌شود.\n'
+            'نشانیِ فرستنده: %(ip)s\n\n'
+            'اگر این خاموش‌شدن را شما انجام داده‌اید، نیازی به هیچ کاری نیست.\n'
+            'اگر شما این کار را نکرده‌اید، همین حالا از صفحه‌ی ورود با '
+            '«رمز را فراموش کرده‌اید؟» رمز را بازنشانی کنید.'
+        ) % {
+            'username': user.get_username(),
+            'ip': event.ip_address or _('نامشخص'),
+        }
+
+    try:
+        send_mail(subject, body, settings.DEFAULT_FROM_EMAIL, [user.email])
+    except Exception:  # noqa: BLE001 — نیتِ صریح: پنهان‌سازی از پاسخِ HTTP
+        logger.exception(
+            '2fa notification email failed for user pk=%s event=%s',
             user.pk, event.event_type,
         )
 
@@ -487,10 +622,34 @@ def password_reset_confirm(request):
     # همین تغییر مرد (هشِ رمز در توکن است) — یعنی یک‌بارمصرف. ضبطِ رویدادِ
     # امنیتی (password_reset_completed) هم داخلِ همین تراکنش است تا با
     # خودِ بازنشانی جدایی‌ناپذیر بماند.
+    #
+    # ورودِ دومرحله‌ای (از 2026-09-14): بازنشانیِ رمز با لینکِ ایمیل،
+    # مالکیتِ صندوقِ کاربر را ثابت کرده است — 2FA عمداً هم‌زمان خاموش
+    # می‌شود تا کاربری که «هم گوشی‌اش را گم کرده و هم رمز را» برای همیشه
+    # بیرون نماند (مسیرِ بازیابیِ استانداردِ ضدِ قفلِ ابدی). هزینه‌ی صادقانه‌ی
+    # این تصمیم: تسخیرِ صندوقِ ایمیل = تسخیرِ کاملِ حساب — که بدونِ 2FA هم
+    # همین‌طور بود؛ راهِ سخت‌گیرانه‌ترِ «کدهایِ بازیابیِ آفلاین» ایده‌ی
+    # آینده است (HANDOFF). خاموشی با رویداد + ایمیلِ خودش اعلام می‌شود تا
+    # مالکِ غافلگیرشده ببیند.
+    two_fa_was_enabled = False
     with transaction.atomic():
         user.set_password(new_password)
         user.save(update_fields=['password'])
         _invalidate_all_sessions(user)
+        profile = UserSecurityProfile.objects.filter(user=user).first()
+        if profile is not None and profile.two_factor_enabled:
+            two_fa_was_enabled = True
+            profile.totp_secret = None
+            profile.totp_confirmed_at = None
+            profile.last_used_totp_step = None
+            profile.save(update_fields=[
+                'totp_secret', 'totp_confirmed_at', 'last_used_totp_step',
+            ])
+            two_fa_event = SecurityEvent.record(
+                user=user,
+                event_type=SecurityEvent.EventType.TWO_FACTOR_DISABLED,
+                request=request,
+            )
         event = SecurityEvent.record(
             user=user,
             event_type=SecurityEvent.EventType.PASSWORD_RESET_COMPLETED,
@@ -500,6 +659,10 @@ def password_reset_confirm(request):
     # اطلاع‌رسانیِ ایمیلیِ امنیتی — بعد از commit؛ شکستِ ارسالِ آن مسیرِ
     # اصلی (خودِ بازنشانی) را خراب نمی‌کند (قواعد در _send_password_notification).
     _send_password_notification(user, event)
+    if two_fa_was_enabled:
+        # ایمیلِ جدا برایِ رویدادِ جدا: بازنشانیِ رمز و خاموشیِ 2FA هر دو
+        # «تغییرِ پیش‌شرطِ ورود»اند و صاحبِ حساب باید هر دو را ببیند.
+        _send_2fa_notification(user, two_fa_event)
 
     return Response({
         'detail': _('رمز عبور با موفقیت بازنشانی شد؛ لطفاً با رمزِ جدید وارد شوید.'),
@@ -541,6 +704,203 @@ def security_events(request):
     events = SecurityEvent.objects.filter(user=request.user)[:limit]
     serializer = SecurityEventSerializer(events, many=True)
     return Response(serializer.data)
+
+
+# ---------------------------------------------------------------------------
+# ورودِ دومرحله‌ای (از 2026-09-14) — چهار مسیرِ مدیریتِ لایه‌ی دوم
+# ---------------------------------------------------------------------------
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def twofa_status(request):
+    """وضعیتِ ورودِ دومرحله‌ایِ خودِ کاربر — GET /api/auth/2fa/
+
+    خروجی همیشه {"enabled": true|false}؛ فقط با توکنِ خودِ کاربر. فرانت‌اند
+    موقعِ باز‌شدنِ مودالِ تنظیمات همین را می‌پرسد تا بداند «جریانِ فعال‌سازی»
+    را نشان بدهد یا «جریانِ خاموش‌کردن» را.
+
+    محدودسازیِ نرخ: پیش‌فرضِ سراسریِ scopeِ 'user' — سبک و فقط-خواندنی.
+    """
+    profile = UserSecurityProfile.objects.filter(user=request.user).first()
+    return Response({'enabled': bool(profile and profile.two_factor_enabled)})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def twofa_setup(request):
+    """گامِ اولِ فعال‌سازی — POST /api/auth/2fa/setup/
+
+    کلیدِ مشترکِ تازه‌ی base32 می‌سازد و همراهِ لینکِ otpauth برمی‌گرداند تا
+    فرانت‌اند QR/کلیدِ دستی را نشان بدهد. کلید تا وقتی با کدِ درست
+    «تأیید» نشود (twofa_confirm) هیچ اثری برِ ورود ندارد — یعنی کاربری که
+    وسطِ راه رها کند، همان لحظه‌ی setup بی‌خیالِ 2FA مانده است (حالتِ
+    میانیِ امن: کلیدِ تأییدنشده در login نادیده گرفته می‌شود).
+
+    دوباره‌صدا‌کردن (قبل ازِ تأیید): کلیدِ قبلیِ تأییدنشده را با تازه‌ای
+    جایگزین می‌کند. بعد ازِ فعال‌سازی: ۴۰۰ — برایِ تعویضِ کلید اول باید
+    خاموش کند (جلوگیری از انباشتِ کلیدهایِ نیمه‌کاره و سردرگمیِ کاربر).
+
+    نکته‌ی ظریفِ پروفایل: ساختِ رکوردِ UserSecurityProfile این‌جا با
+    password_changed_atِ «قدیمی» (_EPOCH_BASELINE) انجام می‌شود تا فعال‌سازیِ
+    2FA نشست‌هایِ زنده را نکُشد (برخلافِ تغییرِ رمز که عمداً می‌کُشد) —
+    تصمیمِ خودِ کاربرِ لاگین‌شده است، نه رویدادِ مهاجم‌محتمل.
+    """
+    profile = UserSecurityProfile.objects.filter(user=request.user).first()
+    if profile is not None and profile.two_factor_enabled:
+        return Response(
+            {'detail': _(
+                'ورودِ دومرحله‌ای از قبل فعال است؛ برایِ تعویضِ کلید اول آن را '
+                'خاموش کنید.'
+            )},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    secret = generate_secret()
+    with transaction.atomic():
+        # get_or_create (نه update_or_create): در مسیرِ «تازه»، password_changed_at
+        # صریحاً مبنایِ بی‌اثر می‌گیرد؛ در مسیرِ «موجود» (مثلاً رمز‌عوض‌کننده‌ی
+        # قدیمی) دست‌نخورده می‌ماند — update_or_create با defaults آن را
+        # بازنویسی می‌کرد و توکن‌هایِ بعد ازِ تغییرِ رمز را زنده می‌کرد (باگِ
+        # امنیتیِ بی‌صدا!).
+        profile, created = UserSecurityProfile.objects.get_or_create(
+            user=request.user,
+            defaults={
+                'totp_secret': secret,
+                'totp_confirmed_at': None,
+                'last_used_totp_step': None,
+                'password_changed_at': _EPOCH_BASELINE,
+            },
+        )
+        if not created:
+            profile.totp_secret = secret
+            profile.totp_confirmed_at = None
+            profile.last_used_totp_step = None
+            profile.save(update_fields=[
+                'totp_secret', 'totp_confirmed_at', 'last_used_totp_step',
+            ])
+
+    return Response({
+        'detail': _(
+            'کلید ساخته شد؛ آن را در اپلیکیشنِ احرازگر ثبت کنید و کدِ فعلی '
+            'را برایِ تأیید بفرستید.'
+        ),
+        'secret': secret,
+        'otpauth_uri': build_otpauth_uri(secret, request.user.get_username()),
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def twofa_confirm(request):
+    """گامِ دومِ فعال‌سازی — POST /api/auth/2fa/confirm/ با {"code": "123456"}
+
+    اولین کدِ درست از اپلیکیشنِ احرازگر = مدرکِ «کلید درست ثبت شده»؛ از
+    این لحظه totp_confirmed_at پر می‌شود و دروازه‌ی login بسته می‌شود.
+    رویدادِ two_factor_enabled ثبت و ایمیلِ اطلاع‌رسانی فرستاده می‌شود
+    (شکستِ SMTP مسیرِ اصلی را خراب نمی‌کند — الگویِ مشترک).
+
+    نکته‌ی ضدِ قفلِ تصادفی: کدِ مصرف‌شده در تأیید، «سوزانده» نمی‌شود —
+    همان کد باید بلافاصله برایِ اولین ورود هم کار کند وگرنه کاربر تا
+    گامِ زمانیِ بعدی (~۳۰ ثانیه) بی‌دلیل بیرون می‌ماند؛ مصرف در ورود است
+    که از آن به بعد ضدِ پخشِ مجدد را فعال می‌کند.
+    """
+    code = (request.data.get('code') or '').strip()
+    profile = UserSecurityProfile.objects.filter(user=request.user).first()
+
+    if profile is None or not profile.totp_secret:
+        return Response(
+            {'code': [_('اول با setup یک کلید بسازید.')]},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if profile.two_factor_enabled:
+        return Response(
+            {'detail': _('ورودِ دومرحله‌ای از قبل فعال است.')},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if _verify_totp_code(profile, code) is None:
+        return Response(
+            {'code': [_('کدِ نامعتبر است؛ کدِ تازه‌ی اپلیکیشن را وارد کنید.')]},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    with transaction.atomic():
+        profile.totp_confirmed_at = timezone.now()
+        profile.save(update_fields=['totp_confirmed_at'])
+        event = SecurityEvent.record(
+            user=request.user,
+            event_type=SecurityEvent.EventType.TWO_FACTOR_ENABLED,
+            request=request,
+        )
+
+    _send_2fa_notification(request.user, event)
+    return Response({
+        'detail': _(
+            'ورودِ دومرحله‌ای فعال شد؛ از این پس ورود، کدِ اپلیکیشنِ '
+            'احرازگر را هم می‌خواهد.'
+        ),
+        'enabled': True,
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def twofa_disable(request):
+    """خاموش‌کردنِ ورودِ دومرحله‌ای — POST /api/auth/2fa/disable/
+
+    ورودی: {"password": "...", "code": "123456"} — هر دو لازم است:
+    رمز (دفاعِ همیشگیِ «نشستِ لو‌رفته کافی نیست» — همان لایه‌ی ۱ِ
+    change_password) + کدِ لحظه‌ای (دفاعِ «رمزِ لو‌رفته هم کافی نیست» —
+    بدونِ این، 2FA خودش را با یک رمز بُر می‌زد). پاسخِ خطا فقط می‌گوید
+    «کدام فیلد مشکل داشت» — اطلاعاتِ اضافه‌ای به مهاجم نمی‌دهد چون هر دو
+    را همین‌جا باید داشته باشد.
+
+    بعد ازِ موفقیت: سه فیلدِ TOTP پاک، رویدادِ two_factor_disabled ثبت،
+    ایمیلِ اطلاع‌رسانی. نشست‌ها عمداً باقی می‌مانند: خاموش‌کنندهٔ مجاز
+    (رمز + کد) همان کاربرِ لاگین‌شده است و بیرون‌انداختنش از همه‌ی
+    دستگاه‌ها فقط اذیت است، نه امنیت (مقایسه کنید با تغییرِ رمز که
+    رویدادِ «رمزِ ممکن‌است لو رفته» است و همه‌جا را می‌کُشد).
+    """
+    password = request.data.get('password') or ''
+    code = (request.data.get('code') or '').strip()
+
+    profile = UserSecurityProfile.objects.filter(user=request.user).first()
+    if profile is None or not profile.two_factor_enabled:
+        return Response(
+            {'detail': _('ورودِ دومرحله‌ای فعال نیست.')},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # لایه‌ی ۱: رمزِ فعلی (چکِ صریح — الگویِ change_password).
+    if not request.user.check_password(password):
+        return Response(
+            {'password': [_('رمز عبور اشتباه است.')]},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    # لایه‌ی ۲: کدِ لحظه‌ایِ اپلیکیشنِ احرازگر.
+    if _verify_totp_code(profile, code) is None:
+        return Response(
+            {'code': [_('کدِ نامعتبر است؛ کدِ تازه‌ی اپلیکیشن را وارد کنید.')]},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    with transaction.atomic():
+        profile.totp_secret = None
+        profile.totp_confirmed_at = None
+        profile.last_used_totp_step = None
+        profile.save(update_fields=[
+            'totp_secret', 'totp_confirmed_at', 'last_used_totp_step',
+        ])
+        event = SecurityEvent.record(
+            user=request.user,
+            event_type=SecurityEvent.EventType.TWO_FACTOR_DISABLED,
+            request=request,
+        )
+
+    _send_2fa_notification(request.user, event)
+    return Response({
+        'detail': _('ورودِ دومرحله‌ای خاموش شد.'),
+        'enabled': False,
+    })
 
 
 # ---------------------------------------------------------------------------
