@@ -461,6 +461,11 @@ class SecurityEvent(models.Model):
         TWO_FACTOR_ENABLED = 'two_factor_enabled', gettext_lazy('فعال‌سازیِ ورودِ دومرحله‌ای')
         TWO_FACTOR_DISABLED = 'two_factor_disabled', gettext_lazy('خاموش‌شدنِ ورودِ دومرحله‌ای')
         LOGIN_2FA_FAILED = 'login_2fa_failed', gettext_lazy('کدِ نامعتبرِ ورودِ دومرحله‌ای')
+        # هشدارِ ورود از نشانیِ جدید (از 2026-09-16): ورودِ موفق از نشانی‌ای
+        # که حسابِ این کاربر قبلاً ندیده بود — رویدادی که مالکِ حساب باید
+        # همان لحظه (ایمیل) و بعداً (این لاگ) ببیند؛ ایده‌ی ثبت‌شده در
+        # TODO.md/HANDOFF («هشدارِ ایمیلِ ورود از نشانیِ جدید»).
+        LOGIN_NEW_ADDRESS = 'login_new_address', gettext_lazy('ورود از نشانیِ جدید')
 
     # سقفِ نگه‌داریِ رویدادها به‌ازایِ هر کاربر — عددِ ثابتِ کلاس (نه متغیرِ
     # محیطی) چون رفتارِ امنیتی است نه تنظیمِ استقرار؛ تست‌ها برای سناریویِ
@@ -557,3 +562,144 @@ class SecurityEvent(models.Model):
             cls.objects.filter(user=user).exclude(pk__in=keep_ids).delete()
 
         return event
+
+
+class KnownLoginAddress(models.Model):
+    """
+    نشانیِ شبکه‌ایِ «شناخته‌شده»ی هر کاربر — مبنایِ هشدارِ ورود از نشانیِ
+    جدید (از 2026-09-16؛ ایده‌ی ثبت‌شده در TODO.md/HANDOFF).
+
+    نکته‌های طراحی:
+
+    - چرا جدولِ جدا و NOT همان SecurityEvent؟ لاگِ رویدادها هرس می‌شود
+      (RETENTION_LIMIT = ۲۰۰) و «شناخته‌شده‌بودنِ» یک نشانی نباید با هرسِ لاگ
+      گم شود — وگرنه کاربر برایِ گوشیِ همیشگیِ خودش، هشدارِ تکراری می‌گیرد.
+      این جدول «آخرین وضعیت» را نگه می‌دارد، نه تاریخچه.
+    - IPِ ثبت‌شده همان هویتی است که محدودسازِ نرخ و SecurityEvent می‌شمارند
+      (AuthBurstThrottle().get_ident) — همه یک تعریف از «این درخواست از کجا
+      آمد» دارند.
+    - نگه‌داریِ محدود (RETENTION_LIMIT): تازه‌ترینِ نشانی‌ها بر اساسِ
+      last_seen_at می‌مانند؛ نشانیِ کهنِ کنارگذاشته‌شده «فراموش» می‌شود و
+      بازگشتش دوباره «جدید» است — مصالحه‌ی صادقانه‌ی رشدِ کراندار بدونِ
+      jobِ زمان‌بندی (همان فلسفه‌ی هرسِ SecurityEvent).
+    - ALERT_DAILY_LIMIT: سقفِ ایمیل‌هایِ هشدار در پنجره‌ی ۲۴ساعته‌ی لغزان —
+      دفاعِ «حسابِ درست، صندوقِ سالم» در برابرِ مهاجمِ رمزدار با شبکه‌ی
+      بزرگ (botnet): رویدادها همیشه ثبت می‌شوند ولی ایمیل‌ها زیرِ سقف
+      می‌مانند. عددِ ثابتِ کلاس چون رفتارِ امنیتی است نه تنظیمِ استقرار.
+    - حذفِ کاربر → حذفِ نشانی‌هایش (CASCADE) — نشانیِ «شناخته‌شده» بدونِ
+      صاحبِ حساب بی‌معناست.
+    """
+
+    # سقفِ نگه‌داریِ نشانی‌ها به‌ازایِ هر کاربر — تست‌ها برایِ سناریویِ هرس
+    # موقتاً همین عدد را کوچک می‌کنند (patch.object؛ الگوی RETENTION_LIMITِ
+    # SecurityEvent).
+    RETENTION_LIMIT = 30
+
+    # حداکثر ایمیلِ «نشانیِ جدید» در هر پنجره‌ی ۲۴ساعته‌ی لغزان به‌ازایِ
+    # کاربر — شمارش روی alert_sent_at (ایمیل‌هایِ واقعاً فرستاده‌شده) است؛
+    # تست‌ها برایِ سناریویِ سقف موقتاً کوچکش می‌کنند.
+    ALERT_DAILY_LIMIT = 5
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='known_login_addresses',
+    )
+
+    # نشانیِ شبکه‌ای — GenericIPAddressField هم IPv4 هم IPv6 را اعتبارسنجی
+    # می‌کند (طولِ حداکثرِ متنیِ IPv6 = ۳۹ + بازنماییِ IPv4-نگاشته).
+    ip_address = models.GenericIPAddressField()
+
+    # اولین و آخرین باری که این نشانی دیده شد — first_seen مرزِ «جدید» است
+    # و last_seen مرجعِ هرس (نشانیِ همیشه‌درِاستفاده هرگز هرس نمی‌شود).
+    first_seen_at = models.DateTimeField(auto_now_add=True)
+    last_seen_at = models.DateTimeField(default=timezone.now)
+
+    # آخرین عاملِ کاربری که از این نشانی آمد (بریده به ۳۰۰ نویسه — هم‌قدِ
+    # SecurityEvent.user_agent) — فقط برایِ نمایش در ایمیلِ هشدار.
+    last_user_agent = models.CharField(max_length=300, blank=True, default='')
+
+    # لحظه‌ی فرستاده‌شدنِ ایمیلِ هشدار برایِ «اولین‌بارِ» این نشانی — مبنایِ
+    # شمارشِ سقفِ ۲۴ساعته (برایِ نشانی‌هایِ بعدی که زیرِ سقف رد شدند خالی
+    # می‌ماند). «تلاشِ ارسال» ثبت می‌شود نه «موفقیتِ قطعی» — شکستِ پایدارِ
+    # SMTP نباید سهمیه را دور بزند و صندوق را درِ ثانیه‌یِ بعدی غرق کند.
+    alert_sent_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        # تازه‌ترین استفاده اول — همان ترتیبی که هرس رویش پایدار است.
+        ordering = ['-last_seen_at', '-id']
+        # هر کاربر هر نشانی را فقط یک‌بار دارد — در سطحِ خودِ دیتابیس
+        # (قیدِ یکتایی؛ رقابتِ دو ورودِ هم‌زمان از یک IP با get_or_create
+        # + IntegrityError-خوارِ خودِ جنگو حل می‌شود).
+        constraints = [
+            models.UniqueConstraint(
+                fields=['user', 'ip_address'],
+                name='known_addr_user_ip_uniq',
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.user.username} - {self.ip_address} (last seen {self.last_seen_at:%Y-%m-%d %H:%M})"
+
+    # ---------------------------------------------------------------------
+    # ثبتِ اتمیک + هرس — تنها نقطه‌ی ورودِ نوشتن (الگوی SecurityEvent.record)
+    # ---------------------------------------------------------------------
+
+    @classmethod
+    def register(cls, *, user, request=None):
+        """نشانیِ «این ورود» را ثبت/به‌روزرسانی می‌کند — اتمیک + هرس.
+
+        خروجی: (address, is_new, is_first)
+          - (None, False, False): هویتِ شبکه‌ای در دسترس نبود (request نبود
+            یا ident خالی) — هیچ ردیفی ساخته/لمس نمی‌شود؛ هشداری هم نیست.
+          - is_first=True: کاربر تا حالا هیچ نشانی‌ای نداشت و این «مبناگذاریِ
+            اول» است — ثبت می‌شود ولی هشدار ندارد (چه چیزی برای مقایسه
+            بوده است؟ اولین ورودِ هر کاربرِ تازه نباید ایمیلِ ترسناک بگیرد).
+          - is_new=True: کاربر مبنا دارد و این نشانی برایِ اولین‌بار دیده
+            شد — مستحقِ رویدادِ login_new_address و ایمیلِ هشدار است.
+
+        نکته‌ی تراکنش: ثبتِ ردیف + به‌روزرسانیِ last_seen + هرس یا همه یا
+        هیچ. نکته‌ی idempotence: دوباره‌صداکردن با همان نشانی فقط last_seen
+        را تازه می‌کند و دیگر «جدید» نیست (هشدارِ تکراری وجود ندارد).
+        """
+        ip_address = None
+        user_agent = ''
+        if request is not None:
+            # همان قرضِ دیده‌بانی‌شده‌ی SecurityEvent.record — هویتِ شبکه‌ای
+            # از نگاهِ throttle، تا لاگ/هشدار/محدودسازی یک زبان حرف بزنند.
+            from .throttles import AuthBurstThrottle
+            ident = AuthBurstThrottle().get_ident(request)
+            ip_address = ident or None
+            user_agent = (request.META.get('HTTP_USER_AGENT') or '')[:300]
+
+        if ip_address is None:
+            return None, False, False
+
+        with transaction.atomic():
+            # «مبنا دارد؟» باید «قبل از» get_or_create سنجیده شود — بعد از
+            # ساختِ اولین ردیف، جوابِ همیشه‌بله است.
+            had_addresses = cls.objects.filter(user=user).exists()
+            address, created = cls.objects.get_or_create(
+                user=user,
+                ip_address=ip_address,
+                defaults={'last_user_agent': user_agent},
+            )
+            if not created:
+                # نشانیِ شناخته‌شده: فقط «آخرین دیدار» را تازه کن (و UA را —
+                # مرورگرِ همان IP هم عوض می‌شود).
+                address.last_seen_at = timezone.now()
+                address.last_user_agent = user_agent
+                address.save(update_fields=['last_seen_at', 'last_user_agent'])
+            # هرسِ همان‌جا: تازه‌ترینِ RETENTION_LIMIT نشانیِ این کاربر بر
+            # اساسِ last_seen_at می‌مانند؛ orderingِ Meta ترتیب را تضمین
+            # می‌کند و وقتی شمار ≤ سقف است، exclude هیچ نمی‌گیرد.
+            keep_ids = list(
+                cls.objects.filter(user=user).values_list('pk', flat=True)[
+                    : cls.RETENTION_LIMIT
+                ]
+            )
+            cls.objects.filter(user=user).exclude(pk__in=keep_ids).delete()
+
+        is_first = created and not had_addresses
+        is_new = created and had_addresses
+        return address, is_new, is_first

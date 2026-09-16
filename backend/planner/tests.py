@@ -74,7 +74,10 @@ from backend.settings import (
     _env_throttle_rate,
     _resolve_database,
 )
-from .models import Subject, Exam, StudyLog, StudyPlan, UserSecurityProfile, SecurityEvent
+from .models import (
+    Subject, Exam, StudyLog, StudyPlan, UserSecurityProfile, SecurityEvent,
+    KnownLoginAddress,
+)
 from .utils import (
     compute_subject_progress,
     generate_study_plan,
@@ -4942,3 +4945,304 @@ class TwoFactorNotificationEmailTests(BaseAPITestCase):
         self.assertIn('Hello alice,', message.body)
         self.assertIn('Originating address: 127.0.0.1', message.body)
         self.assertIn('If this was not you', message.body)
+
+
+# ---------------------------------------------------------------------------
+# هشدارِ ورود از نشانیِ جدید (از 2026-09-16) — مدلِ KnownLoginAddress
+# ---------------------------------------------------------------------------
+
+class KnownLoginAddressModelTests(BaseAPITestCase):
+    """ریاضیاتِ ثبتِ نشانی در KnownLoginAddress.register — بدونِ عبور از API.
+
+    جداسازی: مدل با RequestFactoryِ سبک تست می‌شود (بدونِ چرخه‌ی کاملِ
+    درخواست) تا خطایِ این لایه از خطایِ ویوی login مستقل بماند؛ جریانِ
+    کاملِ API در NewAddressAlertAPITests پایین‌تر است.
+    """
+
+    def _request(self, ip, user_agent='TestBrowser/1.0'):
+        return _request_factory.post(
+            '/api/auth/login/', {}, REMOTE_ADDR=ip, HTTP_USER_AGENT=user_agent,
+        )
+
+    def test_register_without_request_is_noop(self):
+        """request نبودن (فراخوانیِ برنامه‌ای) → هیچ ردیفی، هیچ پرچمی."""
+        address, is_new, is_first = KnownLoginAddress.register(user=self.alice)
+        self.assertIsNone(address)
+        self.assertFalse(is_new)
+        self.assertFalse(is_first)
+        self.assertEqual(KnownLoginAddress.objects.filter(user=self.alice).count(), 0)
+
+    def test_register_with_empty_ident_is_noop(self):
+        """هویتِ شبکه‌ایِ خالی (REMOTE_ADDR='') → مثلِ نبودنِ request."""
+        request = _request_factory.post('/api/auth/login/', {}, REMOTE_ADDR='')
+        address, is_new, is_first = KnownLoginAddress.register(
+            user=self.alice, request=request,
+        )
+        self.assertIsNone(address)
+        self.assertFalse(is_new)
+        self.assertFalse(is_first)
+        self.assertEqual(KnownLoginAddress.objects.filter(user=self.alice).count(), 0)
+
+    def test_first_address_is_baseline_not_new(self):
+        """اولینِ نشانیِ همیشه «مبنا» است، نه «جدید» — هشدار ندارد."""
+        address, is_new, is_first = KnownLoginAddress.register(
+            user=self.alice, request=self._request('1.2.3.4'),
+        )
+        self.assertIsNotNone(address)
+        self.assertFalse(is_new)
+        self.assertTrue(is_first)
+        self.assertEqual(address.ip_address, '1.2.3.4')
+
+    def test_known_address_refreshes_last_seen_without_new_flag(self):
+        """نشانیِ شناخته‌شده: فقط last_seen/UA تازه — نه ردیفِ دوم، نه پرچم."""
+        KnownLoginAddress.register(user=self.alice, request=self._request('1.2.3.4'))
+        address, is_new, is_first = KnownLoginAddress.register(
+            user=self.alice, request=self._request('1.2.3.4', 'Other/2.0'),
+        )
+        self.assertFalse(is_new)
+        self.assertFalse(is_first)
+        self.assertEqual(KnownLoginAddress.objects.filter(user=self.alice).count(), 1)
+        self.assertEqual(address.last_user_agent, 'Other/2.0')
+
+    def test_second_distinct_address_is_new(self):
+        """مبنا که باشد، نشانیِ دیگر برایِ اولین‌بار = جدید."""
+        KnownLoginAddress.register(user=self.alice, request=self._request('1.2.3.4'))
+        address, is_new, is_first = KnownLoginAddress.register(
+            user=self.alice, request=self._request('5.6.7.8'),
+        )
+        self.assertTrue(is_new)
+        self.assertFalse(is_first)
+        self.assertEqual(KnownLoginAddress.objects.filter(user=self.alice).count(), 2)
+
+    def test_addresses_are_per_user(self):
+        """نشانیِ آلیس برایِ باب «شناخته‌شده» نیست — جدول per-user است."""
+        KnownLoginAddress.register(user=self.alice, request=self._request('1.2.3.4'))
+        address, is_new, is_first = KnownLoginAddress.register(
+            user=self.bob, request=self._request('1.2.3.4'),
+        )
+        self.assertFalse(is_new)
+        self.assertTrue(is_first)   # برایِ باب همین اولینِ مبناست
+        self.assertEqual(address.user, self.bob)
+
+    def test_retention_prunes_oldest_by_last_seen(self):
+        """سقفِ نگه‌داری: تازه‌ترین‌ها می‌مانند؛ فراموش‌شده دوباره «جدید» است.
+
+        مصالحه‌ی صادقانه‌ی هرس (مثلِ SecurityEvent): نشانیِ کهنِ کنارگذاشته
+        با بازگشتش دوباره هشدار می‌گیرد — رشدِ جدول کراندار می‌ماند.
+        """
+        with patch.object(KnownLoginAddress, 'RETENTION_LIMIT', 2):
+            KnownLoginAddress.register(user=self.alice, request=self._request('1.1.1.1'))
+            KnownLoginAddress.register(user=self.alice, request=self._request('2.2.2.2'))
+            KnownLoginAddress.register(user=self.alice, request=self._request('3.3.3.3'))
+            self.assertEqual(
+                KnownLoginAddress.objects.filter(user=self.alice).count(), 2,
+            )
+            self.assertFalse(KnownLoginAddress.objects.filter(
+                user=self.alice, ip_address='1.1.1.1',
+            ).exists())
+            # بازگشتِ نشانیِ فراموش‌شده → دوباره «جدید» (رفتارِ مستند)
+            _, is_new, is_first = KnownLoginAddress.register(
+                user=self.alice, request=self._request('1.1.1.1'),
+            )
+            self.assertTrue(is_new)
+            self.assertFalse(is_first)
+
+    def test_constraint_user_ip_unique(self):
+        """قیدِ یکتاییِ (user, ip) در سطحِ دیتابیس — نه فقط get_or_create."""
+        KnownLoginAddress.objects.create(user=self.alice, ip_address='9.9.9.9')
+        from django.db import IntegrityError as _IntegrityError
+        with self.assertRaises(_IntegrityError):
+            KnownLoginAddress.objects.create(user=self.alice, ip_address='9.9.9.9')
+
+
+# ---------------------------------------------------------------------------
+# هشدارِ ورود از نشانیِ جدید — جریانِ کاملِ login (API)
+# ---------------------------------------------------------------------------
+
+@override_settings(**_LOCMEM)
+class NewAddressAlertAPITests(BaseAPITestCase):
+    """دروازه‌ی هشدار در login: مبناگذاری، هشدار، ایمیل، سقف، 2FA، i18n.
+
+    نکته‌ی جداسازی: همه‌ی لاگین‌ها با REMOTE_ADDRِ صریح؛ ایمیل‌ها در
+    mail.outbox (backendِ locmem). مثلِ همیشه، پاسخِ login برایِ هیچ
+    سناریویی شکلِ جدیدی پیدا نمی‌کند — هشدار، ایمیل + رویداد است، نه فیلدِ
+    پاسخ.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.alice.email = 'alice@example.com'
+        self.alice.save(update_fields=['email'])
+
+    def _login(self, ip, **extra):
+        return self.client.post(
+            '/api/auth/login/',
+            {'username': 'alice', 'password': 'pw-12345678'},
+            format='json', REMOTE_ADDR=ip, **extra,
+        )
+
+    def _new_address_events(self):
+        return SecurityEvent.objects.filter(
+            user=self.alice,
+            event_type=SecurityEvent.EventType.LOGIN_NEW_ADDRESS,
+        )
+
+    def test_first_login_is_baseline_without_alert(self):
+        """اولینِ ورودِ همیشه فقط مبناگذاری است — نه رویداد، نه ایمیل."""
+        resp = self._login('1.2.3.4')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(mail.outbox), 0)
+        self.assertEqual(self._new_address_events().count(), 0)
+        self.assertEqual(
+            KnownLoginAddress.objects.filter(user=self.alice).count(), 1,
+        )
+
+    def test_same_ip_second_login_stays_silent(self):
+        """دستگاهِ همیشگی: ورودِ دوباره از همان نشانی هیچ سروصدایی ندارد."""
+        self._login('1.2.3.4')
+        resp = self._login('1.2.3.4')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(mail.outbox), 0)
+        self.assertEqual(self._new_address_events().count(), 0)
+        self.assertEqual(
+            KnownLoginAddress.objects.filter(user=self.alice).count(), 1,
+        )
+
+    def test_new_ip_login_alerts_with_email_and_event(self):
+        """نشانیِ دوم: ایمیلِ هشدار + رویدادِ login_new_address + سهمیه."""
+        self._login('1.2.3.4')
+        resp = self._login('5.6.7.8', HTTP_USER_AGENT='AttackerBot/1.0')
+        self.assertEqual(resp.status_code, 200)
+        # قراردادِ پاسخِ login دست‌نخورده — هشدار در ایمیل/رویداد است نه JSON
+        self.assertEqual(set(resp.json().keys()), {'access', 'refresh'})
+        # ایمیل: یکی، به صاحبِ حساب، با نشانی و راهِ عمل
+        self.assertEqual(len(mail.outbox), 1)
+        message = mail.outbox[0]
+        self.assertEqual(message.to, ['alice@example.com'])
+        self.assertEqual(
+            message.subject, 'ورود از یک نشانیِ جدید — برنامه‌ریزِ هوشمندِ مطالعه',
+        )
+        self.assertIn('سلام alice،', message.body)
+        self.assertIn('5.6.7.8', message.body)
+        self.assertIn('AttackerBot/1.0', message.body)
+        self.assertIn('اگر شما این ورود را نکرده‌اید', message.body)
+        # رویداد: یکی، با همان IPِ نشانیِ تازه
+        self.assertEqual(self._new_address_events().count(), 1)
+        self.assertEqual(self._new_address_events().first().ip_address, '5.6.7.8')
+        # سهمیه‌ی سقفِ ۲۴ساعته خرج شد
+        self.assertTrue(KnownLoginAddress.objects.get(
+            user=self.alice, ip_address='5.6.7.8',
+        ).alert_sent_at is not None)
+
+    def test_alert_email_translated_to_english(self):
+        """همان ایمیل با Accept-Language: en — موضوع/بدنه‌ی انگلیسی."""
+        self._login('1.2.3.4')
+        self._login('5.6.7.8', HTTP_ACCEPT_LANGUAGE='en')
+        message = mail.outbox[0]
+        self.assertEqual(
+            message.subject, 'New sign-in from a new address — Smart Study Planner',
+        )
+        self.assertIn('Hello alice,', message.body)
+        self.assertIn('Address: 5.6.7.8', message.body)
+        self.assertIn('If this was not you', message.body)
+
+    def test_smtp_failure_does_not_break_login(self):
+        """شکستِ SMTP در هشدار → ورود همچنان ۲۰۰ و رویداد ثبت (بلعیده و لاگ)."""
+        self._login('1.2.3.4')
+        with patch('planner.views.send_mail', side_effect=ConnectionError('SMTP down')):
+            resp = self._login('5.6.7.8')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(self._new_address_events().count(), 1)
+
+    def test_no_email_without_registered_email(self):
+        """بدونِ ایمیلِ ثبت‌شده → بی‌صدا؛ رویداد برایِ «فعالیت‌های امنیتی» هست."""
+        self.alice.email = ''
+        self.alice.save(update_fields=['email'])
+        self._login('1.2.3.4')
+        resp = self._login('5.6.7.8')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(mail.outbox), 0)
+        self.assertEqual(self._new_address_events().count(), 1)
+
+    def test_daily_cap_suppresses_email_not_events(self):
+        """سقفِ ۲۴ساعته: از سقف که رد شود ایمیل نمی‌رود ولی رویداد می‌ماند.
+
+        دفاعِ «حسابِ درست، صندوقِ سالم» در برابرِ مهاجمِ رمزدار با شبکه‌ی
+        بزرگ (botnet): لاگ/رویداد همیشه ثبت، ایمیل زیرِ سقف.
+        """
+        with patch.object(KnownLoginAddress, 'ALERT_DAILY_LIMIT', 1):
+            self._login('1.2.3.4')   # مبنا — بی‌ایمیل
+            self._login('2.2.2.2')   # اولینِ هشدار — ایمیل می‌رود (سهمیه: ۱)
+            self._login('3.3.3.3')   # سهمیه تمام → فقط رویداد
+            self._login('4.4.4.4')   # و باز هم فقط رویداد
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(self._new_address_events().count(), 3)
+        # نشانی‌هایِ بعد از سقف سهمیه نخوردند
+        self.assertTrue(KnownLoginAddress.objects.get(
+            user=self.alice, ip_address='3.3.3.3',
+        ).alert_sent_at is None)
+
+    def test_2fa_login_from_new_ip_alerts_after_code(self):
+        """کاربرِ 2FAدار: هشدار فقط بعد ازِ «رمز + کد» — نه بعد ازِ رمزِ تنها."""
+        client = self.client_as(self.alice)
+        secret, _code = _enable_two_factor(client)
+        mail.outbox.clear()   # ایمیلِ «فعال‌سازیِ 2FA» خودِ setup — نه هشدارِ نشانی
+        # ورودِ اول (مبناگذاری) — با کدِ گامِ فعلی
+        resp = self.client.post(
+            '/api/auth/login/',
+            {'username': 'alice', 'password': 'pw-12345678', 'totp': totp_code(secret)},
+            format='json', REMOTE_ADDR='1.2.3.4',
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(mail.outbox), 0)
+        # رمزِ درست + نشانیِ جدید ولی «بدونِ کد» → چالش؛ نه رویدادِ هشدار
+        resp = self.client.post(
+            '/api/auth/login/',
+            {'username': 'alice', 'password': 'pw-12345678'},
+            format='json', REMOTE_ADDR='5.6.7.8',
+        )
+        self.assertEqual(resp.status_code, 401)
+        self.assertTrue(resp.json().get('requires_2fa'))
+        self.assertEqual(self._new_address_events().count(), 0)
+        # رمز + کدِ تازه (گامِ بعد — کدِ قبلی در ورودِ اول مصرف شد) → هشدار
+        resp = self.client.post(
+            '/api/auth/login/',
+            {
+                'username': 'alice', 'password': 'pw-12345678',
+                'totp': _next_step_code(secret),
+            },
+            format='json', REMOTE_ADDR='5.6.7.8',
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(self._new_address_events().count(), 1)
+
+    def test_event_listed_in_security_events_api(self):
+        """رویدادِ نشانیِ جدید در endpointِ فعالیت‌ها با برچسبِ fa/en."""
+        self._login('1.2.3.4')
+        self._login('5.6.7.8')
+        client = self.client_as(self.alice)
+        events = client.get('/api/auth/security/events/').json()
+        self.assertEqual(events[0]['type'], 'login_new_address')
+        self.assertEqual(events[0]['label'], 'ورود از نشانیِ جدید')
+        self.assertEqual(events[0]['ip'], '5.6.7.8')
+        events_en = client.get(
+            '/api/auth/security/events/', HTTP_ACCEPT_LANGUAGE='en',
+        ).json()
+        self.assertEqual(events_en[0]['label'], 'Sign-in from a new address')
+
+    def test_failed_login_from_new_ip_never_alerts(self):
+        """تلاشِ ناموفق (حتی از نشانیِ ناشناس) هیچ چیزی را «شناخته‌شده»
+        نمی‌کند و هشداری نمی‌سازد — ثبتِ نشانی فقط بعد ازِ احرازِ کامل."""
+        self._login('1.2.3.4')
+        resp = self.client.post(
+            '/api/auth/login/',
+            {'username': 'alice', 'password': 'wrong-password'},
+            format='json', REMOTE_ADDR='5.6.7.8',
+        )
+        self.assertEqual(resp.status_code, 401)
+        self.assertEqual(len(mail.outbox), 0)
+        self.assertEqual(self._new_address_events().count(), 0)
+        self.assertEqual(
+            KnownLoginAddress.objects.filter(user=self.alice).count(), 1,
+        )

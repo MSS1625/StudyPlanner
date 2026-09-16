@@ -8,7 +8,7 @@
 #      استاندارد CRUD دارند و DRF می‌تواند مسیرهایشان را خودکار بسازد)
 # ----------------------------------------------------------------------------
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from datetime import timezone as dt_timezone
 
 from rest_framework import viewsets, status, permissions, pagination
@@ -54,7 +54,10 @@ import logging
 from django.db import connection
 from django.conf import settings
 
-from .models import Subject, Exam, StudyPlan, StudyLog, UserSecurityProfile, SecurityEvent
+from .models import (
+    Subject, Exam, StudyPlan, StudyLog, UserSecurityProfile, SecurityEvent,
+    KnownLoginAddress,
+)
 from .serializers import UserSerializer, SubjectSerializer, ExamSerializer, StudyPlanSerializer, StudyLogSerializer, SecurityEventSerializer
 from .utils import generate_study_plan, format_plan_for_frontend, build_subject_distribution, compute_subject_progress
 # مؤلفه‌ی یادگیریِ آماری (از 2026-09-09): مدلِ کالیبراسیونِ «تخمینِ ساعتیِ
@@ -177,7 +180,37 @@ def login(request):
             event_type=SecurityEvent.EventType.LOGIN_SUCCESS,
             request=request,
         )
+        # هشدارِ ورود از نشانیِ جدید (از 2026-09-16): «شناخته‌شده‌بودنِ»
+        # نشانی در جدولِ جدا (KnownLoginAddress) نگه‌داری می‌شود — نه در
+        # لاگِ هرس‌شونده — تا کاربر برایِ دستگاهِ همیشگیِ خودش هشدارِ تکراری
+        # نگیرد. اولینِ ورودِ همیشه فقط «مبناگذاری» است؛ ورودِ بعدی از
+        # نشانیِ ناشناس = رویداد + (زیرِ سقفِ ۲۴ساعته) ایمیلِ هشدار.
+        # ثبتِ این نشانی فقط «بعد ازِ» عبورِ کاملِ احرازِ هویت انجام می‌شود
+        # (رمز و در صورتِ فعال‌بودن، کدِ 2FA) — تلاشِ ناموفق هیچ نشانی‌ای
+        # را «شناخته‌شده» نمی‌کند.
+        new_address_event = None
+        address, is_new_address, _is_first = KnownLoginAddress.register(
+            user=user, request=request,
+        )
+        if is_new_address:
+            new_address_event = SecurityEvent.record(
+                user=user,
+                event_type=SecurityEvent.EventType.LOGIN_NEW_ADDRESS,
+                request=request,
+            )
         refresh = RefreshToken.for_user(user)
+        # ایمیلِ هشدار — فقط برایِ نشانیِ تازه و زیرِ سقفِ ۲۴ساعته؛ شکستِ
+        # ارسال هرگز خودِ ورود را نمی‌شکند (الگوی مشترکِ اطلاع‌رسانی‌ها).
+        # سهمیه (alert_sent_at) «قبل از» ارسال خرج می‌شود تا شکستِ پایدارِ
+        # SMTP نتواند با تلاشِ بی‌پایان سقف را دور بزند.
+        if (
+            new_address_event is not None
+            and address is not None
+            and _new_address_alert_allowed(user)
+        ):
+            address.alert_sent_at = timezone.now()
+            address.save(update_fields=['alert_sent_at'])
+            _send_new_address_notification(user, new_address_event)
         return Response({
             'refresh': str(refresh),
             'access': str(refresh.access_token),
@@ -368,6 +401,69 @@ def _send_2fa_notification(user, event):
     except Exception:  # noqa: BLE001 — نیتِ صریح: پنهان‌سازی از پاسخِ HTTP
         logger.exception(
             '2fa notification email failed for user pk=%s event=%s',
+            user.pk, event.event_type,
+        )
+
+
+def _new_address_alert_allowed(user):
+    """سقفِ ایمیل‌هایِ «نشانیِ جدید» در پنجره‌ی ۲۴ساعته (از 2026-09-16).
+
+    شمارش = ایمیل‌هایِ هشدارِ فرستاده‌شده در ۲۴ ساعتِ گذشته (alert_sent_at
+    روی KnownLoginAddress). از سقف که رد شود، رویدادها همچنان ثبت می‌شوند
+    ولی ایمیل نمی‌رود — مهاجمِ رمزدار با شبکه‌ی بزرگ (botnet) می‌تواند
+    رویداد بسازد ولی صندوقِ کاربر را غرق نکند («حسابِ درست، صندوقِ سالم»).
+    پنجره لغزان است (نه روزِ تقویمی) تا الگویِ حمله نتواند با نیمه‌شب
+    بازی کند. ارزان است: یک شمارشِ ایندکس‌دار به‌ازایِ هر «نشانیِ تازه» —
+    نه هر ورود.
+    """
+    cutoff = timezone.now() - timedelta(hours=24)
+    return (
+        KnownLoginAddress.objects.filter(
+            user=user, alert_sent_at__gte=cutoff,
+        ).count() < KnownLoginAddress.ALERT_DAILY_LIMIT
+    )
+
+
+def _send_new_address_notification(user, event):
+    """ایمیلِ هشدارِ «ورود از نشانیِ جدید» (از 2026-09-16).
+
+    همان قواعدِ الگویِ مشترکِ اطلاع‌رسانی‌ها (_send_password_notification):
+    بدونِ ایمیلِ ثبت‌شده → هیچ؛ شکستِ SMTP → لاگ و بلع تا مسیرِ اصلی
+    (خودِ ورود) ۵۰۰ نشود؛ متن‌ها gettext (fa/en با Accept-Language).
+
+    تفاوتِ لحن با رویدادهایِ پُرسیگنالِ قبلی (تغییرِ رمز/2FA): این هشدار
+    «به‌احتمالِ زیاد خودِ کاربر» است — شبکه‌ی جدید، اینترنتِ موبایل، VPN،
+    محلِ کار. متن عمداً اول حالتِ بی‌خطر را توضیح می‌دهد تا نگرانیِ
+    بی‌مورد نسازد، و راهِ عملِ حالتِ ناخوش (بازنشانیِ رمز + روشن‌کردنِ
+    2FA) را بعد می‌دهد — هشدارِ مفید، هشداری است که خوانده بشود نه اینکه
+    نادیده گرفته شود.
+    """
+    if not user.email:
+        return
+
+    subject = _('ورود از یک نشانیِ جدید — برنامه‌ریزِ هوشمندِ مطالعه')
+    body = _(
+        'سلام %(username)s،\n\n'
+        'ورودی تازه به حسابِ شما از نشانی‌ای انجام شد که قبلاً ندیده‌ایم.\n'
+        'نشانی: %(ip)s\n'
+        'دستگاه/مرورگر: %(user_agent)s\n\n'
+        'اگر این ورود را شما انجام داده‌اید (مثلاً از شبکه‌ی جدیدی مثل '
+        'اینترنتِ موبایل، محلِ کار یا VPN)، نیازی به هیچ کاری نیست؛ این '
+        'نشانی از این پس برایِ حسابِ شما شناخته‌شده است.\n'
+        'اگر شما این ورود را نکرده‌اید، همین حالا از صفحه‌ی ورود با «رمز را '
+        'فراموش کرده‌اید؟» رمز را بازنشانی کنید و ورودِ دومرحله‌ای را هم '
+        'روشن کنید.'
+    ) % {
+        'username': user.get_username(),
+        'ip': event.ip_address or _('نامشخص'),
+        'user_agent': event.user_agent or _('نامشخص'),
+    }
+
+    try:
+        send_mail(subject, body, settings.DEFAULT_FROM_EMAIL, [user.email])
+    except Exception:  # noqa: BLE001 — نیتِ صریح: پنهان‌سازی از پاسخِ HTTP
+        logger.exception(
+            'new-address alert email failed for user pk=%s event=%s',
             user.pk, event.event_type,
         )
 

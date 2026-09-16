@@ -143,7 +143,7 @@ venv/bin/python manage.py loaddata backup.json
 | `DJANGO_COOKIES_SECURE` | `false` | `1` | فلگِ Secure رویِ کوکی‌هایِ Session/CSRF |
 | `DJANGO_HSTS_SECONDS` | `0` (خاموش) | `31536000` (یک سال) | «فقط https تا یک سال» — **فقط بعد از TLS مطمئن** (قابلِ لغویِ فوری نیست) |
 | `DJANGO_PROXY_SSL_HEADER` | خالی | `HTTP_X_FORWARDED_PROTO,https` | جنگو از این هدر می‌فهمد ترافیک https بوده — با `proxy_set_header` بخشِ ۵.۷ جفت می‌شود |
-| `DJANGO_EMAIL_BACKEND` | `...console.EmailBackend` | `...smtp.EmailBackend` | موتورِ ایمیلِ بازیابیِ رمز؛ پیش‌فرضِ console = ایمیل در stdout (بدونِ SMTP) — در Production حتماً SMTP (از 2026-09-12) |
+| `DJANGO_EMAIL_BACKEND` | `...console.EmailBackend` | `...smtp.EmailBackend` | موتورِ ایمیلِ سیستم (بازیابیِ رمز + اطلاع‌رسانی‌هایِ امنیتی: تغییر/بازنشانیِ رمز، فعال/خاموش‌شدنِ 2FA و هشدارِ ورود از نشانیِ جدید)؛ پیش‌فرضِ console = ایمیل در stdout (بدونِ SMTP) — در Production حتماً SMTP (از 2026-09-12) |
 | `DJANGO_EMAIL_HOST` | خالی | `smtp.example.com` | سرورِ SMTP (از 2026-09-12) |
 | `DJANGO_EMAIL_PORT` | `587` | `587` یا `465` | 465 = TLSِ ضمنِ اتصال (`USE_TLS=false` بگذارید) (از 2026-09-12) |
 | `DJANGO_EMAIL_HOST_USER` | خالی | `no-reply@example.com` | کاربرِ SMTP (از 2026-09-12) |
@@ -357,6 +357,7 @@ curl -sI https://your-domain.com/api/health/ | grep -i strict-transport
 11. ☐ `journalctl -u studyplanner -e` بدونِ هشدارِ نرخِ پیش‌فرض و بدونِ خطایِ تکراری.
 12. ☐ `sudo systemctl enable studyplanner` — ری‌بوتِ سرور هم سرویس را برمی‌گرداند.
 13. ☐ ایمیلِ بازیابی: `.env` پنج متغیرِ SMTP + `DJANGO_FRONTEND_BASE_URL=https://your-domain.com`؛ ری‌استارت؛ «فراموشیِ رمز» از مرورگر = ایمیلِ واقعی با لینکِ سالم و کلیک‌پذیر (بخشِ ۵.۱۲).
+14. ☐ هشدارِ نشانیِ جدید (از 2026-09-16): با SMTPِ فعال، از یک شبکه‌ی دیگر (مثلاً اینترنتِ موبایل) وارد شوید و ایمیلِ «ورود از یک نشانیِ جدید» را دریافت کنید؛ ورودِ دوباره از همان شبکه نباید ایمیلِ دومی بفرستد (مبنا گذاشته شد). پشتِ Nginx حتماً `DJANGO_PROXY_SSL_HEADER` ست شده باشد تا IPِ واقعیِ کاربر (X-Forwarded-For) ثبت شود — وگرنه همه‌ی ورودها از IPِ سرورِ پروکسی «شناخته‌شده» می‌شوند و هشدار بی‌معنا می‌شود.
 
 14. ☐ ساعتِ سرور: `timedatectl` → `System clock synchronized: yes` (TOTP ساعتِ دقیق می‌خواهد — بخشِ ۵.۱۳).
 بعد از این فهرست، پروژه «Production-ready» بودنِ خود را عملاً نشان داده است: تمامِ آن‌چه در `README.md` بخشِ ۱۱ «کارهایِ آینده» برایِ استقرار لازم بود، همین راهنما بود.
